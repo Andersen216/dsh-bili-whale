@@ -1,0 +1,82 @@
+{
+  "name": "dsh-bili-whale",
+  "version": "0.2.0",
+  "description": "DSH 插件（dsh-bili-scroll 的 macOS 魔改分支）：每天替你刷 B站、读字幕挑视频、写日报，能在评论区回 @、主动巡逻、主界面面板里引导回复",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "bilibili",
+    "mcp",
+    "duty"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AndersenZZR/dsh-bili-whale.git"
+  },
+  "homepage": "https://github.com/AndersenZZR/dsh-bili-whale#readme",
+  "bugs": {
+    "url": "https://github.com/AndersenZZR/dsh-bili-whale/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "AGENTS.md",
+    "CONTRIBUTORS.md",
+    "LICENSE",
+    "MAC-PATCH.md",
+    "NOTICE.md",
+    "README.md",
+    "client.js",
+    "cordis.patch.yml",
+    "index.js",
+    "lib",
+    "prompts",
+    "selfcheck.mjs",
+    "test-time.mjs",
+    "vendor"
+  ],
+  "engines": {
+    "dsh": ">=0.1.7-rc.1",
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "author": "AndersenZZR"
+}
