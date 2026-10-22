@@ -157,7 +157,7 @@ const pyEnv = (extra = {}) => ({
 export function apply(ctx, config) {
   const pluginDir = dirname(fileURLToPath(import.meta.url))
   // ⭐ 2026-10-22：更新渠道集中配置（别人 fork 走自己的仓库时只改这两个常量）
-  const REPO_OWNER = 'AndersenZZR'
+  const REPO_OWNER = 'Andersen216'
   const REPO_NAME = 'dsh-bili-whale'
   const REPO_SPEC = `${REPO_OWNER}/${REPO_NAME}`
   // ⭐ 自己的版本号（从 package.json 读，设置页要显示它）
