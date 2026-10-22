@@ -1,6 +1,6 @@
 {
   "name": "dsh-bili-whale",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "DSH 插件（dsh-bili-scroll 的 macOS 魔改分支）：每天替你刷 B站、读字幕挑视频、写日报，能在评论区回 @、主动巡逻、主界面面板里引导回复",
   "keywords": [
     "dsh",
@@ -12,11 +12,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AndersenZZR/dsh-bili-whale.git"
+    "url": "git+https://github.com/Andersen216/dsh-bili-whale.git"
   },
-  "homepage": "https://github.com/AndersenZZR/dsh-bili-whale#readme",
+  "homepage": "https://github.com/Andersen216/dsh-bili-whale#readme",
   "bugs": {
-    "url": "https://github.com/AndersenZZR/dsh-bili-whale/issues"
+    "url": "https://github.com/Andersen216/dsh-bili-whale/issues"
   },
   "license": "MIT",
   "type": "module",
@@ -78,5 +78,5 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "author": "AndersenZZR"
+  "author": "Andersen216"
 }

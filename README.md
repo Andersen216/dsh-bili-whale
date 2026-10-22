@@ -29,7 +29,7 @@
 # 桌面版（Electron）用自带 CLI：
 ELECTRON_RUN_AS_NODE=1 "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness" \
   "/Applications/DeepSeek Harness.app/Contents/Resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js" \
-  plugin --profile desktop add github:AndersenZZR/dsh-bili-whale
+  plugin --profile desktop add github:Andersen216/dsh-bili-whale
 ```
 
 装完**重启一次** DSH（⌘Q 再打开）。

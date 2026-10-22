@@ -70,7 +70,7 @@ if (process.platform !== 'win32') return sendJson(res, 200, { ok: false, error: 
 # 桌面版自带的 CLI（在工作目录外跑）
 ELECTRON_RUN_AS_NODE=1 "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness" \
   "/Applications/DeepSeek Harness.app/Contents/Resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js" \
-  plugin --profile desktop add github:AndersenZZR/dsh-bili-whale
+  plugin --profile desktop add github:Andersen216/dsh-bili-whale
 ```
 
 然后重启桌面端。

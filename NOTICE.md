@@ -11,7 +11,7 @@
 
 ## 关于版权署名
 
-`LICENSE` 里保留了两行版权：上游 `Copyright (c) 2026 c1overzz` 与本分支 `Copyright (c) 2026 AndersenZZR`。
+`LICENSE` 里保留了两行版权：上游 `Copyright (c) 2026 c1overzz` 与本分支 `Copyright (c) 2026 Andersen216`。
 本仓库是 [dsh-bili-scroll](https://github.com/c1overzz/dsh-bili-scroll) 的 MIT 衍生分支；
 你可以自由改、再发、商用，保留版权与 MIT 正文即可。
 

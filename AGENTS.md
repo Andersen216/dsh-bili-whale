@@ -12,7 +12,7 @@
    · ⭐ **万一下载链路都不通**（有用户反馈"桌面版上这条链路经常不通"）：**手动放一份 `uv.exe` 到 `<家目录>\bin\` 就行**
      —— 插件会**用那一份、跳过下载** ✓（他 `PATH` 里本来就有 `uv` 的话，直接用那个 ✓）
 2. `dsh plugin --profile web add dsh-bili-whale`（npm，推荐）
-   · 备选：`dsh plugin --profile web add github:AndersenZZR/dsh-bili-whale`
+   · 备选：`dsh plugin --profile web add github:Andersen216/dsh-bili-whale`
    · ⚠️ **升级旧版**：如果用户在设置页看到的按钮叫「**重装依赖**」（不是「**重装主依赖**」），
      说明装的还是 **0.1.0** —— 那一版建 Python 环境时缺一个参数，**依赖装不上、二维码也画不出来**。
      让用户重跑一次上面那条 `add` 就是升级（然后再重启一次）。
