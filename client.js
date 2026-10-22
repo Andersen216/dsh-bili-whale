@@ -301,6 +301,7 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const [proRun, setProRun] = React.useState(null)
       const [proDay, setProDay] = React.useState(null)
       const [proKw, setProKw] = React.useState(null)
+      const [blacklistDraft, setBlacklistDraft] = React.useState(null)
       // ⭐ 这边跑一轮用哪个模型 / 什么强度（和主界面分开，方便主界面开 max、这边省钱）
       const [dutyModel, setDutyModel] = React.useState(null)
       const [nightSec, setNightSec] = React.useState(null)
@@ -948,6 +949,14 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
               onChange: (e) => setPlayFun(e.target.value),
               onBlur: () => { const n = Math.max(0, Number(playFun) || 0); setPlayFun(String(n)); patch({ minPlayFun: n }, '娱乐类门槛') },
             })),
+          h('div', { 'data-bd-row': '' },
+            h('div', { 'data-bd-grow': '' },
+              h('div', { 'data-bd-label': '' }, '内容黑名单（不想看的，逗号分隔）'),
+              h('div', { 'data-bd-note': '' }, '标题/简介/评论命中就整条跳过：不挑、不评论、不接话；默认含 DeepSeek拟人 / 子午男 / 理中客 / 水军 / 赛博藤壶')),
+            h('input', { 'data-bd-input': '', type: 'text', style: { maxWidth: '280px' },
+              value: blacklistDraft ?? (st.config?.videoBlacklist || ''),
+              onChange: (e) => setBlacklistDraft(e.target.value),
+              onBlur: () => { const v = String(blacklistDraft ?? st.config?.videoBlacklist ?? '').trim(); setBlacklistDraft(v); patch({ videoBlacklist: v }, '内容黑名单') } })),
           h('div', { 'data-bd-row': '' },
             h('div', { 'data-bd-grow': '' },
               h('div', { 'data-bd-label': '' }, '手动点一次最多挑几条'),
