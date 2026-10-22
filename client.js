@@ -50,24 +50,29 @@ window.__ModuleLoader__.load({
     const CSS = `
 [data-bili-entry]{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.25));background:transparent;cursor:pointer;font-size:15px;line-height:1;padding:0;margin-right:2px}
 [data-bili-entry]:hover{background:var(--dsw-alias-fill-l2,rgba(128,128,128,.12))}
-[data-bili-fab]{position:fixed;left:18px;bottom:18px;width:40px;height:40px;border-radius:50%;z-index:9998;display:flex;align-items:center;justify-content:center;padding:0;font-size:18px;line-height:1;cursor:pointer;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));background:var(--dsw-alias-bg-1,#1b1f24);color:inherit;box-shadow:0 6px 20px rgba(0,0,0,.28)}
-[data-bili-fab]:hover{background:var(--dsw-alias-fill-l2,rgba(128,128,128,.14))}
-[data-bili-panel]{position:fixed;width:396px;max-width:calc(100vw - 24px);max-height:min(66vh,580px);overflow:auto;z-index:9999;background:var(--dsw-alias-bg-1,#1b1f24);border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.28));border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.35);padding:12px;font-size:12px;color:inherit;line-height:1.5}
+/* ⭐ 2026-10-22（主人：面板黑底黑字看不清）—— 用系统色跟着主题走：
+   背景 Canvas / 文字 CanvasText 会自动跟随根元素的 color-scheme（DSH 白天/黑夜都会设），
+   白天=白底黑字，晚上=深底浅字，不用知道 DSH 内部变量名也能对。 */
+[data-bili-fab],[data-bili-panel]{color-scheme:inherit;}
+[data-bili-fab]{position:fixed;left:18px;bottom:18px;width:40px;height:40px;border-radius:50%;z-index:9998;display:flex;align-items:center;justify-content:center;padding:0;font-size:18px;line-height:1;cursor:pointer;border:1px solid color-mix(in srgb, CanvasText 22%, Canvas);background:Canvas;color:CanvasText;box-shadow:0 6px 20px color-mix(in srgb, CanvasText 18%, transparent)}
+[data-bili-fab]:hover{background:color-mix(in srgb, CanvasText 10%, Canvas)}
+[data-bili-panel]{position:fixed;width:396px;max-width:calc(100vw - 24px);max-height:min(66vh,580px);overflow:auto;z-index:9999;background:Canvas;color:CanvasText;border:1px solid color-mix(in srgb, CanvasText 22%, Canvas);border-radius:14px;box-shadow:0 12px 40px color-mix(in srgb, CanvasText 22%, transparent);padding:12px;font-size:12px;line-height:1.5}
 [data-bili-panel] .bp-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 [data-bili-panel] .bp-title{font-weight:600;font-size:13px}
 [data-bili-panel] .bp-tabs{display:flex;gap:6px;margin-bottom:8px}
-[data-bili-panel] .bp-tab{padding:3px 10px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));background:transparent;cursor:pointer;font-size:12px;color:inherit}
-[data-bili-panel] .bp-tab.on{background:var(--dsw-alias-fill-l3,rgba(128,128,128,.22));font-weight:600}
-[data-bili-panel] .bp-row{display:flex;align-items:flex-start;gap:6px;padding:6px 0;border-bottom:1px dashed var(--dsw-alias-border-l2,rgba(128,128,128,.18))}
+[data-bili-panel] .bp-tab{padding:3px 10px;border-radius:999px;border:1px solid color-mix(in srgb, CanvasText 22%, Canvas);background:transparent;cursor:pointer;font-size:12px;color:inherit}
+[data-bili-panel] .bp-tab.on{background:color-mix(in srgb, CanvasText 16%, Canvas);font-weight:600}
+[data-bili-panel] .bp-row{display:flex;align-items:flex-start;gap:6px;padding:6px 0;border-bottom:1px dashed color-mix(in srgb, CanvasText 16%, Canvas)}
 [data-bili-panel] .bp-row:last-child{border-bottom:0}
 [data-bili-panel] .bp-body{flex:1;min-width:0;word-break:break-word}
-[data-bili-panel] .bp-note{color:var(--dsw-alias-label-tertiary,#8a8f98);font-size:11px}
-[data-bili-panel] .bp-btn{border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));background:transparent;color:inherit;border-radius:7px;padding:2px 8px;font-size:11px;cursor:pointer;white-space:nowrap}
-[data-bili-panel] .bp-btn:hover{background:var(--dsw-alias-fill-l2,rgba(128,128,128,.12))}
-[data-bili-panel] .bp-btn.primary{border-color:var(--dsw-alias-brand-primary,#3b82f6);color:var(--dsw-alias-brand-primary,#3b82f6)}
-[data-bili-panel] .bp-timer{font-variant-numeric:tabular-nums;font-weight:600;color:var(--dsw-alias-brand-primary,#3b82f6)}
-[data-bili-panel] a{color:var(--dsw-alias-brand-primary,#4a9eff);text-decoration:none}
-[data-bili-panel] input.bp-in{flex:1;min-width:0;background:transparent;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.35));border-radius:7px;padding:3px 7px;color:inherit;font-size:12px}
+[data-bili-panel] .bp-note{color:color-mix(in srgb, CanvasText 62%, Canvas);font-size:11px}
+[data-bili-panel] .bp-btn{border:1px solid color-mix(in srgb, CanvasText 22%, Canvas);background:transparent;color:inherit;border-radius:7px;padding:2px 8px;font-size:11px;cursor:pointer;white-space:nowrap}
+[data-bili-panel] .bp-btn:hover{background:color-mix(in srgb, CanvasText 10%, Canvas)}
+[data-bili-panel] .bp-btn.primary{border-color:LinkText;color:LinkText}
+[data-bili-panel] .bp-timer{font-variant-numeric:tabular-nums;font-weight:600;color:LinkText}
+[data-bili-panel] a{color:LinkText;text-decoration:none}
+[data-bili-panel] input.bp-in{flex:1;min-width:0;background:color-mix(in srgb, CanvasText 4%, Canvas);border:1px solid color-mix(in srgb, CanvasText 24%, Canvas);border-radius:7px;padding:3px 7px;color:CanvasText;font-size:12px}
+[data-bili-panel] input.bp-in::placeholder{color:color-mix(in srgb, CanvasText 45%, Canvas)}
 [data-bd-page]{display:flex;flex-direction:column;gap:24px;padding:4px 2px 18px;max-width:760px;font-size:13px;}
 [data-bd-sec]{display:flex;flex-direction:column;gap:12px;padding-bottom:22px;
   border-bottom:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.16));}
