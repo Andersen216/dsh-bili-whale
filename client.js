@@ -308,6 +308,7 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const [hotSec, setHotSec] = React.useState(null)
       const [dmNotifyUid, setDmNotifyUid] = React.useState(null)
       const [ownerUidDraft, setOwnerUidDraft] = React.useState(null)
+      const [mentionNameDraft, setMentionNameDraft] = React.useState(null)
       // ⭐ 实时任务面板：默认折叠，只在有任务时显示"正在跑"；展开能看最近 20 条
       const [showTasks, setShowTasks] = React.useState(false)
       const [nowTs, setNowTs] = React.useState(Date.now())
@@ -555,6 +556,45 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const ct = st.currentTask
       const tasks = Array.isArray(st.recentTasks) ? st.recentTasks : []
       return h('div', { 'data-bd-page': '' },
+
+        /* ── ⭐ 身份（谁是谁，全部可改，不写死）── */
+        h('div', { 'data-bd-sec': '' },
+          h('div', { 'data-bd-h': '' }, '身份（谁是谁）'),
+          h('div', { 'data-bd-row': '' },
+            h('div', { 'data-bd-grow': '' },
+              h('div', { 'data-bd-label': '' }, '主人昵称（认出主人用）'),
+              h('div', { 'data-bd-note': '' }, '只有这个昵称 / 下面的 UID 才叫「主人」；留空就只认 UID')),
+            h('input', {
+              'data-bd-input': '', type: 'text', style: { maxWidth: '240px' },
+              value: mentionNameDraft ?? (st.config?.mentionName || ''),
+              onChange: (e) => setMentionNameDraft(e.target.value),
+              onBlur: () => { const v = String(mentionNameDraft ?? st.config?.mentionName ?? '').trim(); setMentionNameDraft(v); patch({ mentionName: v }, '主人昵称') },
+            })),
+          h('div', { 'data-bd-row': '' },
+            h('div', { 'data-bd-grow': '' },
+              h('div', { 'data-bd-label': '' }, '主人 UID（最可靠的认人方式）'),
+              h('div', { 'data-bd-note': '' }, '只有这个 UID 才叫主人；别人冒充一律不认')),
+            h('input', {
+              'data-bd-input': '', 'data-bd-num': '', type: 'number', min: 0,
+              value: ownerUidDraft ?? (st.config?.ownerUid || 0),
+              onChange: (e) => setOwnerUidDraft(e.target.value),
+              onBlur: () => { const n = Math.max(0, Number(ownerUidDraft) || 0); setOwnerUidDraft(String(n)); patch({ ownerUid: n }, '主人 UID') },
+            })),
+          h('div', { 'data-bd-row': '' },
+            h('div', { 'data-bd-grow': '' },
+              h('div', { 'data-bd-label': '' }, '我的账号（自动从 B站 读取）'),
+              h('div', { 'data-bd-note': '' },
+                (st.self && st.self.uname)
+                  ? ('@' + st.self.uname + '（UID ' + (st.self.mid || '?') + '）—— 名字改了也自动跟上，不用手填')
+                  : '还没读到，点「刷新」从账号读一次')),
+            h('button', { 'data-bd-btn': '', onClick: async () => {
+              try {
+                const r = await jpost('/identity-refresh', {})
+                if (r && r.ok) say('已更新：@' + (r.self?.uname || '?') + '（UID ' + (r.self?.mid || '?') + '）', 'good')
+                else say('刷新失败：' + ((r && r.error) || '未知'), 'warn')
+              } catch (e) { say(String(e?.message ?? e), 'warn') }
+            } }, '刷新')),
+        ),
 
         /* ── ⭐ 实时任务（恢复：设置页里也要能看到）── */
         h('div', { 'data-bd-sec': '', 'data-bd-live': '' },

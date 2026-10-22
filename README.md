@@ -40,6 +40,21 @@ ELECTRON_RUN_AS_NODE=1 "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSe
 dsh plugin --profile desktop add link:/path/to/dsh-bili-whale
 ```
 
+
+## 首次配置（装完必看）
+
+打开 **设置 → 刷B站 → 身份（谁是谁）**：
+
+| 字段 | 填什么 |
+|---|---|
+| **主人昵称** | 你自己的 B站 昵称（认人用） |
+| **主人 UID** | 你自己的 B站 UID（**最可靠**，别人冒充一律不认） |
+| **我的账号** | **不用填** —— 插件每次干活前自动从 B站 读当前昵称/UID，改名也能跟上 |
+
+人设：默认用包里自带的 `prompts/persona-template.md`（**不含任何私人信息**），
+里面的 `{{OWNER_NAME}}` `{{OWNER_UID}}` `{{SELF_NAME}}` `{{SELF_UID}}` 会在运行时替换成上面的设置。
+想自定义人设：把模板复制到你自己的工作区 `AGENTS.md`，再到设置里把「工作区」指过去即可。
+
 ## 目录
 
 - `index.js` — 宿主半端（工具、HTTP `/api/bili-duty/*`、定时器、配置）
