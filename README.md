@@ -37,8 +37,9 @@ ELECTRON_RUN_AS_NODE=1 "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSe
 
 装完**重启一次** DSH（⌘Q 再打开）。
 
-> 📌 这次是本地分支 `feat/own-comment-interaction`，**没推送、没发布** —— 只在这台机器上用 `link:` 装；
-> 上游 / npm 上看到的还是老版本。
+> 📌 现在装的是 **v0.2.8**（评论区互动：我的评论区 30 秒级、楼中楼、悬浮窗评论区页）。
+> 已经推到本仓库（`main` 与 `feat/own-comment-interaction` 分支都在），别人按下面的安装方式装即可；
+> 升级只从本仓库拉，不会覆盖本地改动。
 
 本地开发：
 

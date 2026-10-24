@@ -39,6 +39,7 @@
     "lib",
     "prompts",
     "selfcheck.mjs",
+    "test-own-comments.mjs",
     "test-time.mjs",
     "vendor"
   ],
