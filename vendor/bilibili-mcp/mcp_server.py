@@ -492,6 +492,8 @@ async def bili_video_info(bvid: str) -> str:
         "title": info.get("title"),
         "description": info.get("desc"),
         "author": info.get("owner", {}).get("name"),
+        # ⭐ 2026-10-24：宿主解析「指定视频」时要判断这条视频是不是主人号 / 本鱼号的 ⇒ 把 mid 也带上
+        "owner_mid": info.get("owner", {}).get("mid"),
         "duration": info.get("duration"),
         "pages": len(info.get("pages", [])),
         "tags": [t.get("tag_name") for t in info.get("tag", []) if t.get("tag_name")],
@@ -1410,7 +1412,125 @@ async def bili_received_at_and_likes() -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+# ========== 宿主的「一次性调用」通道（CLI 模式 · 不是 MCP 工具）==========
+# ⭐ 2026-10-24 加的（主人要「自己的评论区主动回人 + 指定视频」）：
+#   这两件事宿主（index.js，Node 侧）自己 fetch 干不了 ——
+#     · 取某人的投稿列表要 wbi 签名，裸 fetch 实测 `code=-403 访问权限不足`；
+#     · 直接抓评论接口实测会被风控打成 `HTTP 412`。
+#   而 bilibili_api（Python）两样都已经处理好了 ⇒ 由宿主起一个一次性 Python 进程：
+#     python mcp_server.py --call space_videos --args '{"uid":123,"ps":10}'
+#   输出一行 JSON 到 stdout。
+#   🔴 下面这些函数**故意不加 @tool()**：它们不进 MCP 工具表，那一轮的模型看不到、也用不到。
+#    （白名单那道闸（BILI_MCP_TOOLS）只认注册过的工具，这两只连注册都不注册。）
+
+async def space_videos(uid: int, ps: int = 10, keyword: str = "") -> str:
+    """
+    宿主专用：拿某个 UID 的最近投稿（wbi 签名由 bilibili_api 处理）。
+
+    Args:
+        uid: B站 UID
+        ps: 取几条（1–50）
+        keyword: 在该用户投稿里按关键词搜（「指定视频」用）
+    """
+    cred = get_cred()
+    try:
+        u = user.User(uid=int(uid), credential=cred)
+        result = await u.get_videos(
+            pn=1,
+            ps=max(1, min(int(ps or 10), 50)),
+            keyword=str(keyword or ""),
+            order=user.VideoOrder.PUBDATE,
+        )
+        videos = []
+        for item in (result or {}).get("list", {}).get("vlist", []):
+            videos.append({
+                "bvid": item.get("bvid", ""),
+                "title": item.get("title", ""),
+                "created": item.get("created", 0),
+                "comment": item.get("comment", 0),
+                "play": item.get("play", 0),
+                "aid": item.get("aid", 0),
+            })
+        return json.dumps({"ok": True, "uid": int(uid), "videos": videos}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
+
+
+async def comments_time_batch(items, ps: int = 20) -> str:
+    """
+    宿主专用：一次性抓多条视频的**按时间倒序**评论（含 mid，宿主判重 / 排除自己要靠它）。
+
+    Args:
+        items: [{"bvid": "BV...", "aid": 0}]，aid 传 0 就在这里现查（多一次请求）
+        ps: 每条视频最多取几条
+    """
+    cred = get_cred()
+    out = {}
+    limit = max(1, min(int(ps or 20), 50))
+    for it in (items or [])[:12]:
+        bvid = str((it or {}).get("bvid") or "")
+        if not bvid:
+            continue
+        try:
+            aid = int((it or {}).get("aid") or 0)
+            if not aid:
+                info = await video.Video(bvid=bvid, credential=cred).get_info()
+                aid = int(info.get("aid") or 0)
+            resp = await comment.get_comments(
+                oid=aid,
+                type_=comment.CommentResourceType.VIDEO,
+                page_index=1,
+                order=comment.OrderType.TIME,
+                credential=cred,
+            )
+            comments = []
+            for r in (resp or {}).get("replies") or []:
+                member = r.get("member") or {}
+                content = r.get("content") or {}
+                comments.append({
+                    "rpid": r.get("rpid", 0),
+                    "mid": str(member.get("mid") or ""),
+                    "uname": member.get("uname", ""),
+                    "content": content.get("message", ""),
+                    "ctime": r.get("ctime", 0),
+                    "like": r.get("like", 0),
+                    "rcount": r.get("rcount", 0),
+                })
+            out[bvid] = {"ok": True, "aid": aid, "comments": comments[:limit]}
+        except Exception as e:
+            # 单条失败不拖垮整批 —— 宿主那边按 bvid 分辨"真没评论"和"没抓到"
+            out[bvid] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        await asyncio.sleep(0.4)
+    return json.dumps({"ok": True, "results": out}, ensure_ascii=False)
+
+
+def _cli_main() -> None:
+    """`--call <函数名> --args '<json>'` 的一次性调用入口。"""
+    try:
+        name = ""
+        args = {}
+        if "--call" in sys.argv:
+            i = sys.argv.index("--call")
+            name = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        if "--args" in sys.argv:
+            j = sys.argv.index("--args")
+            args = json.loads(sys.argv[j + 1]) if j + 1 < len(sys.argv) else {}
+        fn = globals().get(name)
+        # 只放行本文件里定义的可调用对象；`mcp`、`_cli_main` 之类不给调
+        if not callable(fn) or name.startswith("_") or name == "mcp":
+            print(json.dumps({"ok": False, "error": f"未知调用：{name}"}, ensure_ascii=False))
+            sys.exit(2)
+        out = asyncio.run(fn(**args))
+        print(out if isinstance(out, str) else json.dumps(out, ensure_ascii=False))
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+        sys.exit(1)
+
+
 # ========== 启动 ==========
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    if "--call" in sys.argv:
+        _cli_main()
+    else:
+        mcp.run(transport="stdio")

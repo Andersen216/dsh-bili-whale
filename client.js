@@ -169,6 +169,16 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       ['Europe/Berlin', '柏林'],
       ['UTC', 'UTC'],
     ]
+
+    /* ⭐ v0.2.7 评论区互动总模式（契约 docs/own-comments.md 第六节）：
+       三段按钮里每一个都要把差别写出来 —— 不然用户以为「关掉别人」和「全关」是一回事。
+       默认 own（config 里还没有这个字段时也按 own 算，见 Panel 里的 cScope）。 */
+    const COMMENT_SCOPES = [
+      ['own', '只回我的评论区（推荐）', '别人评论区完全不动'],
+      ['both', '我的 + 别人（别人最多一句）', '别人评论区放开，但每个视频最多一句'],
+      ['off', '都关（只写报告）', '评论区一个字不说（报告照写、私信照发）'],
+    ]
+
     const tzOf = (cfgObj) => (cfgObj && cfgObj.tz) || 'Asia/Shanghai'
     const tzLabel = (tz) => (tz === 'system' ? '系统' : tz === 'Asia/Shanghai' ? '北京' : String(tz || '').split('/').pop() || 'UTC')
     const bjClock = (ts, tz) => {
@@ -310,6 +320,16 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const [dmNotifyUid, setDmNotifyUid] = React.useState(null)
       const [ownerUidDraft, setOwnerUidDraft] = React.useState(null)
       const [mentionNameDraft, setMentionNameDraft] = React.useState(null)
+      // ⭐ v0.2.7 评论区互动（我的 / 别人的）：也都是"本地草稿"——页面每 5 秒轮询 /status，
+      //    直接绑 cfg 的话用户打字打到一半就被服务端那份冲掉了（和上面几个输入框同一个道理）。
+      const [ownEvery, setOwnEvery] = React.useState(null)          // 多久扫一次（分钟）
+      const [ownVideos, setOwnVideos] = React.useState(null)        // 每次扫几条视频的评论区
+      const [ownPerRun, setOwnPerRun] = React.useState(null)        // 每次最多回几条
+      const [ownPerDay, setOwnPerDay] = React.useState(null)        // 每天最多回几条（0 = 不回）
+      const [bubbleDay, setBubbleDay] = React.useState(null)        // 每天最多冒泡几条
+      const [otherMax, setOtherMax] = React.useState(null)          // 别人评论区最多互动几句
+      const [pinnedDraft, setPinnedDraft] = React.useState(null)    // 指定视频的输入框
+      const [pinnedRes, setPinnedRes] = React.useState(null)        // 上次「保存并查找」的返回 { resolved, error }
       // ⭐ 实时任务面板：默认折叠，只在有任务时显示"正在跑"；展开能看最近 20 条
       const [showTasks, setShowTasks] = React.useState(false)
       const [nowTs, setNowTs] = React.useState(Date.now())
@@ -492,6 +512,43 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
         finally { setBusy('') }
       }
 
+      /* ⭐ v0.2.7：手动去「我的评论区」回一轮（POST /own-comment-run）。
+       * 宿主会忽略间隔（不然要等下一次太慢），但仍然受当天上限约束；指定视频永远优先。
+       * 受保护的情况（都关了 / 已有回合在跑 / 没登录 / 环境没好）宿主回 {ok:false,error}，照原话显示。 */
+      const onOwnCommentRun = async () => {
+        setBusy('own-comment')
+        try {
+          const r = await jpost('/own-comment-run', {})
+          if (!r || r.ok === false) { say('没起来：' + ((r && r.error) || '未知原因'), 'warn'); return }
+          if (r.started) say('已开跑：去评论区回一轮' + (r.count ? '（' + r.count + ' 条）' : '') + ' —— 结果会自动刷新', 'good')
+          else say(r.hint || '现在没有要回的（可能今天到上限了 / 已经有回合在跑）', '')
+        } catch (e) { say(String(e?.message ?? e), 'warn') } finally { setBusy('') }
+      }
+
+      /* 指定视频：契约是「传 title ⇒ 先存进 pinnedVideo，再解析」。解析失败不抛错，
+       * 宿主把原因写在 error 里（人话，比如"在你号/本鱼号的视频里没找到这条"）。 */
+      const onPinnedResolve = async () => {
+        const title = String(pinnedDraft ?? st.config?.pinnedVideo ?? '').trim()
+        if (!title) { say('先填标题关键词或 BV；留空 = 自动回你号和本鱼号最近的视频', 'warn'); return }
+        setBusy('pinned')
+        try {
+          const r = await jpost('/pinned-resolve', { title })
+          setPinnedRes(r || { ok: false, error: '没拿到结果' })
+          const rv = r && r.resolved
+          if (rv) {
+            const kind = rv.kind === 'owner' ? '（你的号）' : rv.kind === 'self' ? '（本鱼号）' : ''
+            say('已指定：《' + (rv.title || '') + '》 ' + (rv.bv || '') + kind, 'good')
+          } else say('没找到：' + ((r && r.error) || '这条不在你号/本鱼号的视频里'), 'warn')
+        } catch (e) { say(String(e?.message ?? e), 'warn') } finally { setBusy('') }
+      }
+
+      const onPinnedClear = async () => {
+        setPinnedDraft(''); setPinnedRes(null)
+        await patch({ pinnedVideo: '' }, '指定视频')
+        // 顺手刷一次状态：宿主状态块里那份 pinned 解析结果也跟着清掉
+        try { const d = await jget('/status'); if (d && d.ok) setSt(d) } catch { /* 刷新失败不影响清除 */ }
+      }
+
       const onLoginStart = async () => {
         setBusy('login')
         setLoginTone('')
@@ -552,6 +609,41 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
         const x = Math.max(0, Math.round(Number(sec) || 0))
         const h = Math.floor(x / 3600); const m = Math.floor((x % 3600) / 60); const ss = x % 60
         return (h ? h + ':' : '') + String(m).padStart(h ? 2 : 1, '0') + ':' + String(ss).padStart(2, '0')
+      }
+
+      /* ⭐ v0.2.7 评论区互动：旧宿主 / 旧 config.json 里这些字段可能压根不存在
+       *    ⇒ 一律 ?? 兜底成契约里的默认值，页面照常渲染（旧宿主只是不认这些值，不会崩）。 */
+      const cScope = cfg.commentScope ?? 'own'                 // own / both / off
+      const oc = st.ownComment || {}                           // 宿主的运行状态块（旧宿主 = 空对象）
+      const cEvery = cfg.ownCommentEveryMin ?? 3
+      const cMaxPerDay = cfg.ownCommentMaxPerDay ?? 20
+      const cBubbleMax = cfg.ownBubbleMaxPerDay ?? 2
+      const pinnedRaw = String(cfg.pinnedVideo || '').trim()
+      const pinnedState = oc.pinned || null                    // { raw, resolved, error }
+      const ownRecent = Array.isArray(oc.recentReplied) ? oc.recentReplied.filter(Boolean).slice(0, 3) : []
+
+      // null / 空串 = 用户还没改过 ⇒ 用默认值；0 是合法值（每天最多回 0 条 / 冒泡 0 条）—— 不能用 || 兜底
+      const clampNum = (v, def, lo, hi) => {
+        const raw = (v === null || v === undefined || String(v).trim() === '') ? def : Number(v)
+        const n = Number.isFinite(raw) ? Math.round(raw) : def
+        return Math.max(lo, Math.min(n, hi))
+      }
+
+      /* 数字行统一写法：本地草稿 + onBlur 才存 + 钳到契约范围（照现有那些输入框的写法，只是抽出来少抄几遍）。
+         cur = 宿主当前值（旧宿主可能没有 ⇒ 用 def）；⚠️ 显示值必须用 cur，不然用户改过的值会被默认值盖掉，
+         而且"点一下输入框再点走"（草稿还是 null）会把配置写回默认值。 */
+      const numRow = (label, note, draft, setDraft, cur, def, lo, hi, field, what) => {
+        const curVal = (cur === null || cur === undefined || cur === '') ? def : cur
+        return h('div', { 'data-bd-row': '' },
+          h('div', { 'data-bd-grow': '' },
+            h('div', { 'data-bd-label': '' }, label),
+            h('div', { 'data-bd-note': '' }, note)),
+          h('input', {
+            'data-bd-input': '', 'data-bd-num': '', type: 'number', min: lo, max: hi,
+            value: draft ?? String(curVal),
+            onChange: (e) => setDraft(e.target.value),
+            onBlur: () => { const n = clampNum(draft, curVal, lo, hi); setDraft(String(n)); patch({ [field]: n }, what) },
+          }))
       }
 
       const ct = st.currentTask
@@ -756,9 +848,14 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           }),
           h(ToggleRow, {
             label: '主动搜索（评论区互动）',
-            note: '点开那一刻立刻巡逻一次，之后每 N 分钟一次；只扫今天挑过的视频，省 token。默认关',
+            // ⭐ v0.2.7：这个开关动的是「别人」的评论区 ⇒ 总模式不是 both 时直接灰掉，
+            //    不然用户开了没效果，会以为坏了（生效规则见 lib/own-comments.mjs 的 effectiveCommentPolicy）
+            note: cScope === 'both'
+              ? '点开那一刻立刻巡逻一次，之后每 N 分钟一次；只扫今天挑过的视频，省 token。默认关'
+              : '当前模式不动别人评论区 —— 先灰着（到上面的「评论区互动（我的 / 别人的）」选「我的 + 别人」才生效）',
             on: sw('proactive'),
             onChange: (v) => patch({ proactive: v }, '主动搜索'),
+            disabled: cScope !== 'both',
           }),
           sw('proactive') ? h('div', null,
             h('div', { 'data-bd-row': '' },
@@ -875,6 +972,146 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
             + (st.hot ? ' · 🔥热窗口中（每 ' + (st.hotPollSec || 8) + ' 秒看一次）' : '')
             + ' · 回复方式：' + ((st.config?.replyVia || 'headless') === 'llm' ? '直连模型' : '起会话（完整提示词）') + (st.lastReplyVia ? '（上次：' + (st.lastReplyVia === 'llm' ? '直连模型' : '起会话') + '）' : '')
             + ' · 常驻刷：' + (st.loopEveryMin ? `每 ${st.loopEveryMin} 分钟（上次 ${st.lastLoopAt ? bjClock(Date.parse(st.lastLoopAt), tzOf(st.config)) : '—'}）` : '关'))),
+
+        /* ── 评论区互动（我的 / 别人的）──
+           ⭐ v0.2.7：以前"评论区互动"到处接话、在别人楼下互动太多。
+           现在默认只回自己的评论区（主人号 + 本鱼号的视频），别人评论区要显式切到「我的 + 别人」才动，
+           而且每个视频最多回一句。字段名/范围以 docs/own-comments.md 第六节为准。 */
+        h('div', { 'data-bd-sec': '' },
+          h('div', { 'data-bd-h': '' }, '评论区互动（我的 / 别人的）'),
+          h('div', { 'data-bd-label': '' }, '总模式'),
+          h('div', { 'data-bd-row': '', style: { flexWrap: 'wrap', alignItems: 'flex-start' } },
+            ...COMMENT_SCOPES.map(([v, label, note]) => h('div', {
+              key: v,
+              style: { display: 'flex', flexDirection: 'column', gap: '4px', maxWidth: '224px' },
+            },
+              h('button', {
+                'data-bd-btn': '', 'data-primary': cScope === v ? '' : undefined,
+                onClick: () => { if (cScope !== v) patch({ commentScope: v }, '评论区模式') },
+              }, label),
+              h('div', { 'data-bd-note': '' }, note)))),
+          h('div', { 'data-bd-note': '' },
+            '现在：' + (cScope === 'off' ? '都关（只写报告、照发私信）'
+              : cScope === 'both' ? '我的 + 别人（别人评论区每个视频最多一句）'
+                : '只回我的评论区（别人评论区完全不动 —— 推荐）')),
+
+          /* ── 我的评论区（主人号 UID + 本鱼号 UID 的视频）── */
+          cScope !== 'off' ? h('div', { 'data-bd-sub': '' },
+            h('div', { 'data-bd-label': '' }, '我的评论区（主人号 + 本鱼号的视频）'),
+            h(ToggleRow, {
+              label: '主动回我的评论区',
+              note: '每 ' + cEvery + ' 分钟看一眼你号和本鱼号最近的视频评论区；有人说话就回一句（陌生人一律「你」，不泄露隐私）',
+              on: cfg.ownComment ?? true,
+              onChange: (v) => patch({ ownComment: v }, '主动回我的评论区'),
+            }),
+            numRow('多久扫一次（分钟）', '1–120；默认 3 —— 我的评论区是高频，默认 3 分钟看一次；手动点「现在去回一轮」不受这个间隔限制',
+              ownEvery, setOwnEvery, cfg.ownCommentEveryMin, 3, 1, 120, 'ownCommentEveryMin', '扫评论区间隔'),
+            numRow('每次最多扫几条视频的评论区', '1–10；默认 4。轮转着扫（最久没查过的优先），不会老盯着同一条',
+              ownVideos, setOwnVideos, cfg.ownCommentMaxVideos, 4, 1, 10, 'ownCommentMaxVideos', '每次扫几条视频'),
+            numRow('每次最多回几条', '1–5；默认 2',
+              ownPerRun, setOwnPerRun, cfg.ownCommentMaxPerRun, 2, 1, 5, 'ownCommentMaxPerRun', '每次回几条'),
+            numRow('每天最多回几条', '0–100；默认 20（0 = 今天不回）',
+              ownPerDay, setOwnPerDay, cfg.ownCommentMaxPerDay, 20, 0, 100, 'ownCommentMaxPerDay', '每天回几条'),
+            h(ToggleRow, {
+              label: '只回提问的',
+              note: '默认关 = 谁说话都接（主人要「只要有人说话就可以回应」）；开了就只回提问 / 求助的',
+              on: cfg.ownCommentQuestionOnly ?? false,
+              onChange: (v) => patch({ ownCommentQuestionOnly: v }, '只回提问'),
+            }),
+            h(ToggleRow, {
+              label: '没新评论时冒泡（自己发一条）',
+              note: '某个视频评论区没人说话、且距上次冒泡 ≥12 小时，就发一条 ≤30 字的评论；默认开',
+              on: cfg.ownBubble ?? true,
+              onChange: (v) => patch({ ownBubble: v }, '没新评论时冒泡'),
+            }),
+            (cfg.ownBubble ?? true) ? h('div', { 'data-bd-sub': '' },
+              numRow('每天最多冒泡几条', '0–10；默认 2',
+                bubbleDay, setBubbleDay, cfg.ownBubbleMaxPerDay, 2, 0, 10, 'ownBubbleMaxPerDay', '每天冒泡几条')) : null,
+            h(ToggleRow, {
+              label: '冒泡 / 回复时 @ 主人',
+              note: '纯文本 @（评论里的 @ 不会给你发通知）；另外还会用私信通知你一次',
+              on: cfg.ownCommentAtOwner ?? true,
+              onChange: (v) => patch({ ownCommentAtOwner: v }, '@ 主人'),
+            }),
+            h('div', { 'data-bd-row': '' },
+              h('button', {
+                'data-bd-btn': '', 'data-primary': '',
+                disabled: busy === 'own-comment' || Boolean(oc.busy) || Boolean(st.running),
+                onClick: onOwnCommentRun,
+              }, '现在去回一轮'),
+              h('div', { 'data-bd-note': '' },
+                '今天已回 ' + (oc.dayCount ?? 0) + ' / ' + (oc.maxPerDay ?? cMaxPerDay) + ' 条'
+                + ' · 上次 ' + (oc.lastAt ? bjClock(oc.lastAt, tzOf(st.config)) : '还没跑过')
+                + ' · 下次 ' + (oc.nextAt ? bjClock(oc.nextAt, tzOf(st.config)) : '—')
+                + (oc.busy ? ' · ⏳ 正在跑' : '')
+                + ' · 冒泡 ' + (oc.bubblesToday ?? 0) + ' / ' + (oc.bubbleMaxPerDay ?? cBubbleMax) + ' 条')),
+            ownRecent.length
+              ? h('div', null,
+                h('div', { 'data-bd-note': '' }, '最近回过的（最近 3 条，点链接直接跳那条评论）：'),
+                ownRecent.map((x, i) => h('div', { 'data-bd-task': '', key: 'oc' + (x.rpid ?? i) },
+                  h('span', { class: 'bd-ico' }, '💬'),
+                  h('span', { 'data-bd-grow': '' },
+                    (x.nick || '匿名') + '：' + (x.text || '') + (x.bv ? '（' + x.bv + '）' : '')),
+                  x.url ? h('a', { href: x.url, target: '_blank', rel: 'noreferrer' }, '去 B站 看') : null,
+                  h('span', { class: 'bd-dur' }, x.at ? bjClock(x.at, tzOf(st.config)) : ''))))
+              : h('div', { 'data-bd-note': '' }, '还没回过 —— 点上面的「现在去回一轮」试试'))
+          : null,
+
+          /* ── 指定视频（填了以后优先去这一条的评论区回人）── */
+          h('div', { 'data-bd-label': '' }, '指定视频'),
+          h('div', { 'data-bd-row': '' },
+            h('div', { 'data-bd-grow': '' },
+              h('div', { 'data-bd-note': '' }, '填标题关键词或 BV；留空 = 自动回你号和本鱼号最近的视频')),
+            h('input', {
+              'data-bd-input': '', type: 'text', style: { maxWidth: '240px' },
+              placeholder: '例如：我的世界 / BV1xx411c7mD',
+              value: pinnedDraft ?? (st.config?.pinnedVideo || ''),
+              onChange: (e) => setPinnedDraft(e.target.value),
+              onKeyDown: (e) => { if (e.key === 'Enter') onPinnedResolve() },
+            }),
+            h('button', { 'data-bd-btn': '', 'data-primary': '', disabled: busy === 'pinned', onClick: onPinnedResolve }, '保存并查找'),
+            pinnedRaw ? h('button', { 'data-bd-btn': '', disabled: busy === 'pinned', onClick: onPinnedClear }, '清除指定') : null),
+          (() => {
+            // 解析结果：刚点「保存并查找」的返回优先，其次宿主状态块里记着的；失败原因照原话显示
+            const rv = (pinnedRes && pinnedRes.resolved) || (pinnedState && pinnedState.resolved) || null
+            const err = (pinnedRes && pinnedRes.error) || (pinnedState && pinnedState.error) || ''
+            if (rv) {
+              const kind = rv.kind === 'owner' ? '你的号' : rv.kind === 'self' ? '本鱼号' : rv.kind === 'pinned' ? '你指定的' : ''
+              return h('div', { 'data-bd-ok': '' },
+                '✅ 找到：《' + (rv.title || '') + '》 ' + (rv.bv || '') + (kind ? '（' + kind + '）' : ''))
+            }
+            if (err) return h('div', { 'data-bd-no': '' }, '⚠️ 解析失败：' + err)
+            if (pinnedRaw) return h('div', { 'data-bd-note': '' }, '当前指定：' + pinnedRaw + '（还没解析出来 —— 点一次「保存并查找」）')
+            return null
+          })(),
+          pinnedRaw ? h('div', { 'data-bd-row': '' },
+            h('button', {
+              'data-bd-btn': '',
+              disabled: busy === 'own-comment' || Boolean(oc.busy) || Boolean(st.running),
+              onClick: onOwnCommentRun,
+            }, '去这条评论区回一轮'),
+            h('div', { 'data-bd-note': '' },
+              (cScope === 'off' || !(cfg.ownComment ?? true))
+                ? '⚠️ 现在评论区回人是关着的（总模式「都关」或「主动回我的评论区」关了）—— 先存着，开了才会去回'
+                : '优先回这条视频；它解析不出来时，会退回去自动回你号和本鱼号最近的视频')) : null,
+
+          /* ── 别人评论区（只有 both 模式放开，且每个视频最多一句）── */
+          h('div', { 'data-bd-label': '' }, '别人评论区'),
+          cScope === 'both'
+            ? h('div', { 'data-bd-sub': '' },
+                numRow('别人评论区最多互动几句', '1–3；默认 1 —— 同一个视频只回一句，楼中楼每串只回 1 条',
+                  otherMax, setOtherMax, cfg.otherCommentMax, 1, 1, 3, 'otherCommentMax', '别人评论区条数'),
+                // ⭐ 2026-10-24 主人追加：回别人时自然带一句宣传（不硬广、最多一句）；默认开
+                h(ToggleRow, {
+                  label: '回别人时自然带一句宣传',
+                  note: '比如「本鱼是替主人被迫营业做宣传的，想看 AI 竞赛 / AI 拟人 就去 @主人 那边」；不硬广、最多一句',
+                  on: cfg.otherPromo ?? true,
+                  onChange: (v) => patch({ otherPromo: v }, '宣传引导'),
+                }))
+            : h('div', { 'data-bd-note': '' },
+                '当前模式不动别人评论区 —— 想放开，把上面的总模式切到「我的 + 别人」。'
+                + '（「主动搜索（评论区互动）」「自动评论」两个开关在别的分组里，模式不对时是灰的 —— 选了「我的 + 别人」才能开）'),
+        ),
 
         /* ── 用哪个模型跑（和主界面分开 · 省钱） ──
            ⭐ 2026-10-20：以前插件照抄主界面当前的模型/强度 —— 主界面开 max，这边也跟着 max。
@@ -1017,9 +1254,14 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
               }))) : null,
           h(ToggleRow, {
             label: '自动评论并 @ 你',
-            note: '默认关；开了之后它会在挑中的视频下面留评论，并 @ 你填的那个人',
+            // ⭐ v0.2.7：自动评论发生在「挑中的视频」（别人的）下面 ⇒ 同样只有 both 模式才有效，
+            //    契约第六节要求这时置灰（effectiveCommentPolicy 会强制 autoComment=false）
+            note: cScope === 'both'
+              ? '默认关；开了之后它会在挑中的视频下面留评论，并 @ 你填的那个人'
+              : '当前模式不动别人评论区 —— 先灰着（到上面的「评论区互动（我的 / 别人的）」选「我的 + 别人」才生效）',
             on: sw('autoComment'),
             onChange: (v) => patch({ autoComment: v }, '自动评论'),
+            disabled: cScope !== 'both',
           }),
           sw('autoComment') ? h('div', { 'data-bd-sub': '' },
             h('div', { 'data-bd-row': '' },
@@ -1305,6 +1547,10 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const pend = Array.isArray(mp.pending) ? mp.pending : []
       const recent = Array.isArray(mp.recentReplied || mp.repliedRecent) ? (mp.repliedRecent || []) : []
       const c = cfg || {}
+      // ⭐ v0.2.7：评论区互动的只读状态（面板上只看不改；要改去设置页「评论区互动」）
+      //    旧宿主 /status 里没有 ownComment 块 ⇒ 用 {} 兜底，别让面板崩
+      const ocSt = (st && st.ownComment) || {}
+      const ocScope = ocSt.scope || c.commentScope || 'own'
       const sw = (k) => Boolean(c[k])
       const statusText = st
         ? (st.running ? ('正在跑 ' + bpDur(st.runningFor || 0))
@@ -1375,6 +1621,13 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           h('div', null, '上一轮：' + (st && st.lastResult ? (st.lastResult.ok ? '成功' : '失败') + '（' + bpClock(st.lastResult.at) + '，' + (st.lastResult.why || '') + '）' : '还没跑')),
           h('div', { className: 'bp-note' }, '主动搜索：' + (p.enabled ? ('开 · 今天已逗 ' + (p.dayCount || 0) + '/' + (p.maxPerDay || 6) + ' · 下次 ' + bpClock(p.nextAt)) : '关'))),
         ),
+        // ⭐ v0.2.7：评论区互动只读状态（「我的 N 条 / 别人关」），面板上只看不改 —— 改去设置页
+        h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' },
+          h('div', null, '评论区：' + (ocScope === 'off'
+            ? '都关（只写报告）'
+            : '我的 ' + (ocSt.dayCount ?? 0) + ' 条'
+              + (ocScope === 'both' ? ' · 别人最多 ' + (c.otherCommentMax ?? 1) + ' 条' : ' · 别人关'))
+            + (ocSt.busy ? ' · 正在跑' : '') + (ocSt.lastAt ? ' · 上次 ' + bpClock(ocSt.lastAt) : '')))),
         h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' },
           h('div', null, '私信通知：' + (st && st.dmLast ? (st.dmLast.ok ? '✅ ' + bpClock(st.dmLast.at) : '❌ ' + (st.dmLast.error || '')) : '还没发过')),
           h('div', { className: 'bp-note' }, '两本日记/报告在设置页「刷B站」里看'))),
