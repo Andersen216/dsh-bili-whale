@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | `commentScope` | string | `'own'` | `own` / `both` / `off` | 评论区互动总开关：只在我的评论区 / 我的+别人 / 全关 |
 | `ownComment` | boolean | `true` | — | 主动回「我的评论区」（主人号 UID + 本鱼号 UID 的视频） |
-| `ownCommentEveryMin` | number | `3` | 1–120 | 多久扫一次我的评论区（分钟；我的这边是**高频**，默认 3 分钟） |
+| `ownCommentEverySec` | number | `30` | 20–3600 | 多久扫一次我的评论区（**秒**；我的这边是高频，默认 **30 秒**） |
 | `ownCommentMaxVideos` | number | `4` | 1–10 | 每次最多扫几条视频的评论区（轮转，公平覆盖） |
 | `ownCommentMaxPerRun` | number | `2` | 1–5 | 每次最多回几条评论 |
 | `ownCommentMaxPerDay` | number | `20` | 0–100 | 每天最多回几条（0 = 不回） |
@@ -29,10 +29,10 @@
   - **别人评论区一律不动** ⇒ 有效 `autoComment=false`、`proactive=false`、`replyToComments=false`；
   - 自己评论区按 `ownComment` 走。
 - `commentScope === 'both'`：
-  - 别人评论区放开，但**低频**（走 `proactiveEveryMin`，默认 180 分钟；我的评论区是高频 3 分钟）；
+  - 别人评论区放开，但**低频**（走 `proactiveEveryMin`，默认 **10 分钟**，5–1440；我的评论区是高频 30 秒）；
   - 收口：有效 `commentPerRound = min(cfg.commentPerRound, cfg.otherCommentMax)`；
     主动巡逻每次 `min(cfg.proactiveMaxPerRun, cfg.otherCommentMax)`，**同一条视频只回一条**，**同一个人 7 天内只回一条**；
-    楼中楼回复每串只回 1 条。
+    楼中楼回复每串只回 1 条；**我的视频评论区里的楼中楼也会一起抓/回**（主评论接口自带前几条楼中楼）。
   - `otherPromo=true` 时，回别人评论区那句允许自然带一句宣传引导（替主人被迫营业、想看 AI 竞赛/AI 拟人就去 @主人 那边看），
     但**最多一句、不硬广、不是每条都带**。
 - `commentScope === 'off'`：评论区一个字都不说（报告照写、私信照发）。
@@ -71,7 +71,7 @@ ownComment: {
 
 1. 定时器每 60 秒醒一次 `ownCommentTick()`（全部包 try/catch，**绝不能把异常抛给宿主**）。
 2. 满足条件才跑：`commentScope!=='off' && ownComment && 08:00–24:00 && !runningRound && !mentionBusy && 登录 && venvReady`，
-   且距上次 ≥ `ownCommentEveryMin` 分钟，且今天 `dayCount < ownCommentMaxPerDay`。
+   且距上次 ≥ `ownCommentEverySec` 秒，且今天 `dayCount < ownCommentMaxPerDay`。
 3. 视频池（缓存 30 分钟，状态存 `own-comments-state.json`）：
    - 主人号（`ownerUid`）最近投稿（`space_videos`，ps=10）
    - 本鱼号（凭证里的 `dedeuserid`）最近投稿（`space_videos`，ps=5）
@@ -123,7 +123,7 @@ ownComment: {
    - `都关（只写报告）`
 2. **我的评论区**（`commentScope !== 'off'` 时显示）：
    - `ToggleRow`：主动回我的评论区（`ownComment`）
-   - 数字：多久扫一次（`ownCommentEveryMin`，5–120 分）· 每次扫几条视频（`ownCommentMaxVideos`，1–10）
+   - 数字：多久扫一次（`ownCommentEverySec`，20–3600 秒，默认 30）· 每次扫几条视频（`ownCommentMaxVideos`，1–10）
      · 每次最多回几条（`ownCommentMaxPerRun`，1–5）· 每天最多回几条（`ownCommentMaxPerDay`，0–100）
    - `ToggleRow`：只回提问（`ownCommentQuestionOnly`）
    - `ToggleRow`：没新评论时冒泡（`ownBubble`）+ 数字 每天最多冒泡几条（`ownBubbleMaxPerDay`，0–10）
@@ -135,10 +135,14 @@ ownComment: {
    - 输入标题关键词或 BV → `POST /pinned-resolve {title}`；显示 `✅ 找到：《标题》 BVxxx（你的号/本鱼号）`
      或 `⚠️ 没找到…`；有值时再点一次「去这条评论区回一轮」= `POST /own-comment-run`
    - 明确写：留空 = 自动回你号和本鱼号最近的视频
-4. **别人评论区**：
+4. **我的视频列表（点一条就指定它）**：`st.ownComment.targets` 里列出主人号 + 本鱼号最近的视频标题，
+   点「选这条」= 把它的 BV 写进 `pinnedVideo` 并解析 —— **主人不用自己找 BV 号**。
+5. **别人评论区**：
    - 当前模式是 `own`/`off` 时，显示说明「当前模式不动别人评论区」+ 现有的「主动搜索（评论区互动）」「自动评论」开关**置灰**
      （`disabled`，或追加提示文字；不要悄悄让人以为开了有效）；
-   - 模式 `both` 时显示数字：别人评论区最多互动几句（`otherCommentMax`，1–3）。
+   - 模式 `both` 时显示数字：别人评论区最多互动几句（`otherCommentMax`，1–3）+「回别人时自然带一句宣传」（`otherPromo`）。
+6. **悬浮窗「评论区」页**（主界面左下角 🐋 面板）：看**谁在说**（待回列表）、**本鱼回了啥**（最近回过：原话 → 回复 → 链接），
+   并可直接操作：现在回一轮 / 暂停·开启我的评论区 / 切换总模式 / 忽略某条。
 5. 状态整体刷新沿用现有的 `useStatus(5000)` 轮询（`st.ownComment` 已在 status 里）。
    浮动面板（`BiliQuickPanel`）加一行只读状态即可：「评论区：我的 N 条 / 别人关」。
 
@@ -170,8 +174,11 @@ UI 编码约定（照现有写法）：`h()`、`ToggleRow`、`patch({...}, '标�
 2. 打开 **设置 → 刷B站 → 评论区互动**，总模式选「**只回我的评论区**」（推荐，也是默认）。
    这一档别人评论区**完全不动**；想放开再切「我的 + 别人（别人最多一句）」。
 3. 点「**现在去回一轮**」验证：跑完去主人号 / 本鱼号的视频评论区看有没有新回复；
-   按钮旁边会显示「今天已回 N 条 / 上次 / 下次 / 正在跑」。想指定视频就在「指定视频」框填标题关键词或 BV，
-   点「保存 + 解析」，显示 `✅ 找到：《…》BV…` 后再点「去这条评论区回一轮」。
+   按钮旁边会显示「今天已回 N 条 / 上次 / 下次 / 正在跑」。
+4. 想指定「优先回哪条视频」：**不用自己找 BV** —— 设置页「指定视频」下面的「**我的视频**」列表，
+   点某一条右边的「选这条」就行（= 把它的 BV 设为 `pinnedVideo`）。
+5. 也可以在主界面左下角 🐋 **悬浮窗 →「评论区」页**里看：待回的评论、本鱼回过的原话、以及
+   「现在回一轮 / 暂停我的评论区 / 切换总模式 / 忽略某条」这些操作都在那儿。
 
 ### 怎么验证 / 怎么排错
 

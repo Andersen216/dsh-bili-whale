@@ -51,7 +51,7 @@ const ctime = (msAgo = 0) => Math.floor((NOW - msAgo) / 1000)
 
 /* 这次新增的 13 个配置字段（schema / DEFAULTS / clampPatch / POST 白名单 / 设置页 四处都要有） */
 const NEW_FIELDS = [
-  'commentScope', 'ownComment', 'ownCommentEveryMin', 'ownCommentMaxVideos',
+  'commentScope', 'ownComment', 'ownCommentEverySec', 'ownCommentMaxVideos',
   'ownCommentMaxPerRun', 'ownCommentMaxPerDay', 'ownCommentQuestionOnly',
   'ownBubble', 'ownBubbleMaxPerDay', 'ownCommentAtOwner',
   'otherCommentMax', 'otherPromo', 'pinnedVideo',
@@ -133,14 +133,15 @@ test('A3 effectiveCommentPolicy：off ⇒ 全关；非法 commentScope 回退 ow
 test('A4 clampOwnCommentPatch：13 个字段全部按契约钳制', () => {
   const p = clampOwnCommentPatch({
     commentScope: 'both', ownComment: 0,
-    ownCommentEveryMin: 999, ownCommentMaxVideos: 0, ownCommentMaxPerRun: 99,
+    ownCommentEverySec: 99999, ownCommentMaxVideos: 0, ownCommentMaxPerRun: 99,
     ownCommentMaxPerDay: -5, ownCommentQuestionOnly: 1,
     ownBubble: 0, ownBubbleMaxPerDay: 99, ownCommentAtOwner: 0,
     otherCommentMax: 0, otherPromo: 0, pinnedVideo: '  指定视频  ',
   })
   assert.equal(p.commentScope, 'both')
   assert.equal(p.ownComment, false)
-  assert.equal(p.ownCommentEveryMin, 120, 'ownCommentEveryMin 上限 120')
+  assert.equal(p.ownCommentEverySec, 3600, 'ownCommentEverySec 上限 3600 秒')
+  assert.equal(clampOwnCommentPatch({ ownCommentEverySec: 1 }).ownCommentEverySec, 20, 'ownCommentEverySec 下限 20 秒')
   assert.equal(p.ownCommentMaxVideos, 1, 'ownCommentMaxVideos 下限 1')
   assert.equal(p.ownCommentMaxPerRun, 5, 'ownCommentMaxPerRun 上限 5')
   assert.equal(p.ownCommentMaxPerDay, 0, 'ownCommentMaxPerDay 下限 0')
@@ -154,7 +155,7 @@ test('A4 clampOwnCommentPatch：13 个字段全部按契约钳制', () => {
 
   // 默认值也核对一遍（等于 lib 里那份 OWN_COMMENT_DEFAULTS）
   assert.equal(OWN_COMMENT_DEFAULTS.commentScope, 'own')
-  assert.equal(OWN_COMMENT_DEFAULTS.ownCommentEveryMin, 3)
+  assert.equal(OWN_COMMENT_DEFAULTS.ownCommentEverySec, 30, '我的评论区默认 30 秒扫一次')
   assert.equal(OWN_COMMENT_DEFAULTS.ownCommentMaxVideos, 4)
   assert.equal(OWN_COMMENT_DEFAULTS.ownCommentMaxPerRun, 2)
   assert.equal(OWN_COMMENT_DEFAULTS.ownCommentMaxPerDay, 20)
@@ -165,12 +166,12 @@ test('A4 clampOwnCommentPatch：13 个字段全部按契约钳制', () => {
 test('A5 clampOwnCommentPatch：非法值回默认、pinnedVideo 截断、别的字段原样带过', () => {
   const d = clampOwnCommentPatch({
     commentScope: 'zzz',
-    ownCommentEveryMin: 'abc', ownCommentMaxVideos: NaN, ownCommentMaxPerRun: Infinity,
+    ownCommentEverySec: 'abc', ownCommentMaxVideos: NaN, ownCommentMaxPerRun: Infinity,
     ownCommentMaxPerDay: 'x', ownBubbleMaxPerDay: 'abc', otherCommentMax: '?',
     pinnedVideo: 'x'.repeat(500),
   })
   assert.equal(d.commentScope, 'own')
-  assert.equal(d.ownCommentEveryMin, 3)
+  assert.equal(d.ownCommentEverySec, 30)
   assert.equal(d.ownCommentMaxVideos, 4)
   assert.equal(d.ownCommentMaxPerRun, 2)
   assert.equal(d.ownCommentMaxPerDay, 20)
@@ -179,9 +180,9 @@ test('A5 clampOwnCommentPatch：非法值回默认、pinnedVideo 截断、别的
   assert.equal(d.pinnedVideo.length, 120, 'pinnedVideo 最长 120 字')
 
   // 只处理认识的键；其它字段原样带过（persistCfg 还要用）
-  const keep = clampOwnCommentPatch({ perDay: 7, ownCommentEveryMin: '60' })
+  const keep = clampOwnCommentPatch({ perDay: 7, ownCommentEverySec: '60' })
   assert.equal(keep.perDay, 7)
-  assert.equal(keep.ownCommentEveryMin, 60, '数字字符串要转成数字')
+  assert.equal(keep.ownCommentEverySec, 60, '数字字符串要转成数字（秒）')
 
   // 空 / 没传 / null 都安全
   assert.deepEqual(clampOwnCommentPatch(), {})

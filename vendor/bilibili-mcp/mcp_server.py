@@ -1495,8 +1495,26 @@ async def comments_time_batch(items, ps: int = 20) -> str:
                     "ctime": r.get("ctime", 0),
                     "like": r.get("like", 0),
                     "rcount": r.get("rcount", 0),
+                    "root": 0,
+                    "parent": 0,
                 })
-            out[bvid] = {"ok": True, "aid": aid, "comments": comments[:limit]}
+                # ⭐ 2026-10-24 主人："我视频评论区的楼中楼我也要回" —— 主评论接口自带楼中楼（通常前 3 条），
+                #    直接捎上，不用再为每条主评论额外请求一次（高频扫描时那样会被风控）。
+                for sub in (r.get("replies") or [])[:3]:
+                    sm = sub.get("member") or {}
+                    sc = sub.get("content") or {}
+                    comments.append({
+                        "rpid": sub.get("rpid", 0),
+                        "mid": str(sm.get("mid") or ""),
+                        "uname": sm.get("uname", ""),
+                        "content": sc.get("message", ""),
+                        "ctime": sub.get("ctime", 0),
+                        "like": sub.get("like", 0),
+                        "rcount": sub.get("rcount", 0),
+                        "root": r.get("rpid", 0),          # 回复楼中楼时 bili_reply 要带 root
+                        "parent": sub.get("parent", 0) or r.get("rpid", 0),
+                    })
+            out[bvid] = {"ok": True, "aid": aid, "comments": comments[:limit * 2]}
         except Exception as e:
             # 单条失败不拖垮整批 —— 宿主那边按 bvid 分辨"真没评论"和"没抓到"
             out[bvid] = {"ok": False, "error": f"{type(e).__name__}: {e}"}

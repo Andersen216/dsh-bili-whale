@@ -542,6 +542,23 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
         } catch (e) { say(String(e?.message ?? e), 'warn') } finally { setBusy('') }
       }
 
+      /* ⭐ 2026-10-24（主人："我不知道怎么获取 BV 号"）：不让他手抄 BV ——
+       * 直接点自己视频列表里的一条，把它的 BV 设成「指定视频」，再让宿主解析一次拿标题。 */
+      const onPickVideo = async (v) => {
+        const bv = String((v && v.bv) || '').trim()
+        if (!bv) return
+        setPinnedDraft(bv)
+        setBusy('pinned')
+        try {
+          await patch({ pinnedVideo: bv }, '指定视频')
+          const r = await jpost('/pinned-resolve', {})
+          setPinnedRes(r || { ok: false, error: '没拿到结果' })
+          const rv = r && r.resolved
+          if (rv) say('已指定：《' + (rv.title || '') + '》 ' + (rv.bv || bv), 'good')
+          else say('已记下 BV：' + bv + '（解析失败：' + ((r && r.error) || '未知') + '）', 'warn')
+        } catch (e) { say(String(e?.message ?? e), 'warn') } finally { setBusy('') }
+      }
+
       const onPinnedClear = async () => {
         setPinnedDraft(''); setPinnedRes(null)
         await patch({ pinnedVideo: '' }, '指定视频')
@@ -615,7 +632,7 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
        *    ⇒ 一律 ?? 兜底成契约里的默认值，页面照常渲染（旧宿主只是不认这些值，不会崩）。 */
       const cScope = cfg.commentScope ?? 'own'                 // own / both / off
       const oc = st.ownComment || {}                           // 宿主的运行状态块（旧宿主 = 空对象）
-      const cEvery = cfg.ownCommentEveryMin ?? 3
+      const cEvery = cfg.ownCommentEverySec ?? 30
       const cMaxPerDay = cfg.ownCommentMaxPerDay ?? 20
       const cBubbleMax = cfg.ownBubbleMaxPerDay ?? 2
       const pinnedRaw = String(cfg.pinnedVideo || '').trim()
@@ -860,11 +877,11 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           sw('proactive') ? h('div', null,
             h('div', { 'data-bd-row': '' },
               h('div', { 'data-bd-grow': '' }, h('div', { 'data-bd-label': '' }, '间隔多少分钟巡逻一次'),
-                h('div', { 'data-bd-note': '' }, '30–1440；默认 180（3 小时）')),
+                h('div', { 'data-bd-note': '' }, '5–1440；默认 10（别人评论区走低频，我的评论区是 30 秒级）')),
               h('input', { 'data-bd-input': '', 'data-bd-num': '', type: 'number', min: 30, max: 1440,
-                value: proEvery ?? (st.config?.proactiveEveryMin || 180),
+                value: proEvery ?? (st.config?.proactiveEveryMin || 10),
                 onChange: (e) => setProEvery(e.target.value),
-                onBlur: () => { const n = Math.max(30, Math.min(Number(proEvery) || 180, 1440)); setProEvery(String(n)); patch({ proactiveEveryMin: n }, '巡逻间隔') } })),
+                onBlur: () => { const n = Math.max(5, Math.min(Number(proEvery) || 10, 1440)); setProEvery(String(n)); patch({ proactiveEveryMin: n }, '巡逻间隔') } })),
             h('div', { 'data-bd-row': '' },
               h('div', { 'data-bd-grow': '' }, h('div', { 'data-bd-label': '' }, '每次最多逗几条'),
                 h('div', { 'data-bd-note': '' }, '1–5；默认 2')),
@@ -1004,8 +1021,8 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
               on: cfg.ownComment ?? true,
               onChange: (v) => patch({ ownComment: v }, '主动回我的评论区'),
             }),
-            numRow('多久扫一次（分钟）', '1–120；默认 3 —— 我的评论区是高频，默认 3 分钟看一次；手动点「现在去回一轮」不受这个间隔限制',
-              ownEvery, setOwnEvery, cfg.ownCommentEveryMin, 3, 1, 120, 'ownCommentEveryMin', '扫评论区间隔'),
+            numRow('多久扫一次（秒）', '20–3600；默认 30 秒 —— 我的评论区是高频（主人要 30 秒扫一次）；手动点「现在去回一轮」不受这个间隔限制',
+              ownEvery, setOwnEvery, cfg.ownCommentEverySec, 30, 20, 3600, 'ownCommentEverySec', '扫评论区间隔'),
             numRow('每次最多扫几条视频的评论区', '1–10；默认 4。轮转着扫（最久没查过的优先），不会老盯着同一条',
               ownVideos, setOwnVideos, cfg.ownCommentMaxVideos, 4, 1, 10, 'ownCommentMaxVideos', '每次扫几条视频'),
             numRow('每次最多回几条', '1–5；默认 2',
@@ -1028,8 +1045,8 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
               numRow('每天最多冒泡几条', '0–10；默认 2',
                 bubbleDay, setBubbleDay, cfg.ownBubbleMaxPerDay, 2, 0, 10, 'ownBubbleMaxPerDay', '每天冒泡几条')) : null,
             h(ToggleRow, {
-              label: '冒泡 / 回复时 @ 主人',
-              note: '纯文本 @（评论里的 @ 不会给你发通知）；另外还会用私信通知你一次',
+              label: '偶尔 @ 主人',
+              note: '不用每条都 @：整轮最多挑 1 条 @ 你，冒泡也会 @（纯文本 @ 不产生通知，私信会另发一次）',
               on: cfg.ownCommentAtOwner ?? true,
               onChange: (v) => patch({ ownCommentAtOwner: v }, '@ 主人'),
             }),
@@ -1094,6 +1111,23 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
               (cScope === 'off' || !(cfg.ownComment ?? true))
                 ? '⚠️ 现在评论区回人是关着的（总模式「都关」或「主动回我的评论区」关了）—— 先存着，开了才会去回'
                 : '优先回这条视频；它解析不出来时，会退回去自动回你号和本鱼号最近的视频')) : null,
+
+          /* ── 我的视频列表：点一条 = 指定这条，不用自己找 BV 号 ── */
+          (() => {
+            const tvs = Array.isArray(oc.targets) ? oc.targets : []
+            return h('div', { 'data-bd-sub': '' },
+              h('div', { 'data-bd-label': '' }, '我的视频（点一条就指定它，不用找 BV 号）'),
+              tvs.length
+                ? tvs.slice(0, 8).map((v, i) => h('div', { 'data-bd-row': '', key: 'pv' + i },
+                    h('span', { 'data-bd-grow': '' },
+                      (v.kind === 'self' ? '【本鱼号】' : v.kind === 'owner' ? '【你的号】' : '【指定】') + (v.title || v.bv || '')),
+                    h('button', {
+                      'data-bd-btn': '',
+                      disabled: busy === 'pinned',
+                      onClick: () => onPickVideo(v),
+                    }, pinnedRaw && pinnedRaw === String(v.bv || '') ? '已指定' : '选这条')))
+                : h('div', { 'data-bd-note': '' }, '（点一次「现在去回一轮」后，这里会列出你号和本鱼号最近的视频）'))
+          })(),
 
           /* ── 别人评论区（只有 both 模式放开，且每个视频最多一句）── */
           h('div', { 'data-bd-label': '' }, '别人评论区'),
@@ -1610,6 +1644,57 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
             h('div', { className: 'bp-note' }, bpClock(x.at))),
           x.url ? h('a', { href: x.url, target: '_blank', rel: 'noreferrer' }, '看') : null)),
       )
+      /* ⭐ 2026-10-24 悬浮窗「评论区」页：谁在说、本鱼准备/已经回了什么，都能在这儿看和操作 */
+      const ocPend = Array.isArray(ocSt.pending) ? ocSt.pending : []
+      const ocRecent = Array.isArray(ocSt.recentReplied) ? ocSt.recentReplied : []
+      const ocIgnore = async (item) => {
+        try {
+          const r = await bpPost('/own-comment-ignore', { rpid: item.rpid })
+          if (r && r.ok === false) say('忽略失败：' + (r.error || '未知'))
+          else { say('已忽略这条'); try { setSt(await bpFetch('/status')) } catch { /* 忽略 */ } }
+        } catch (e) { say('忽略失败：' + String(e && e.message || e)) }
+      }
+      const ocModeLabel = ocScope === 'off' ? '都关（只写报告）' : ocScope === 'both' ? '我的 + 别人' : '只回我的评论区'
+      const commentTab = h('div', null,
+        // 状态 + 操作
+        h('div', { className: 'bp-row' },
+          h('div', { className: 'bp-body' },
+            h('div', null, '🐟 我的评论区 · ' + ocModeLabel),
+            h('div', { className: 'bp-note' },
+              '今天已回 ' + (ocSt.dayCount ?? 0) + '/' + (ocSt.maxPerDay ?? '?') + ' 条'
+              + ' · 冒泡 ' + (ocSt.bubblesToday ?? 0) + '/' + (ocSt.bubbleMaxPerDay ?? '?')
+              + (ocSt.busy ? ' · ⏳ 正在回' : '')
+              + (ocSt.nextAt ? ' · 下次 ' + bpClock(ocSt.nextAt) : '')
+              + (c.ownComment === false ? ' · 已暂停' : '')))),
+        h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' } },
+          h('button', { className: 'bp-btn primary', disabled: !!busy || !!(st && st.running) || ocSt.busy, onClick: () => doRun('回一轮', '/own-comment-run') }, '现在回一轮'),
+          h('button', { className: 'bp-btn' + (c.ownComment !== false ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('ownComment', !(c.ownComment !== false)) }, c.ownComment !== false ? '暂停我的评论区' : '开启我的评论区'),
+          h('div', { className: 'bp-note', style: { alignSelf: 'center' } }, '总模式：'),
+          ...[['own', '只回我的'], ['both', '我的+别人'], ['off', '都关']].map(([v, label]) =>
+            h('button', { key: 'sc-' + v, className: 'bp-btn' + (ocScope === v ? ' primary' : ''), disabled: !!busy, onClick: () => { patchCfg('commentScope', v); say('总模式已切到：' + label) } }, label))),
+        // 待回 / 正在回：谁的评论、准备回哪条
+        h('div', { className: 'bp-note', style: { marginTop: '4px' } },
+          ocSt.busy ? '⏳ 正在回这几条（回复内容生成中…）' : ('待回 ' + ocPend.length + ' 条' + (ocPend.length ? '（下一轮就回它们）' : ''))),
+        ocPend.length ? ocPend.map((x, i) => h('div', { className: 'bp-row', key: 'ocp' + (x.rpid ?? i) },
+          h('div', { className: 'bp-body' },
+            h('div', null, (x.nick || '匿名') + '：' + (x.content || '')),
+            h('div', { className: 'bp-note' }, '《' + (x.title || x.bv || '') + '》' + (x.root ? ' · 楼中楼' : '') + ' · ' + (x.bv || ''))),
+          h('button', { className: 'bp-btn', disabled: !!busy, onClick: () => ocIgnore(x) }, '忽略'),
+          h('a', { href: 'https://www.bilibili.com/video/' + (x.bv || '') + '#reply' + (x.rpid || ''), target: '_blank', rel: 'noreferrer' }, '看')))
+          : h('div', { className: 'bp-note' }, '没有待回的（我的评论区有新人说话时，下一跳扫到这里）'),
+        // 最近回过的：原话 → 本鱼回了啥
+        h('div', { className: 'bp-note', style: { marginTop: '8px' } }, '最近回过（' + ocRecent.length + '）'),
+        ocRecent.length ? ocRecent.slice(0, 6).map((x, i) => h('div', { className: 'bp-row', key: 'ocr' + (x.rpid ?? i) },
+          h('div', { className: 'bp-body' },
+            h('div', null, (x.nick || '匿名') + '：' + (x.text || '')),
+            h('div', { className: 'bp-note' }, '本鱼回了：' + (x.reply || '（原文没记到 · 去 B站 看）')),
+            h('div', { className: 'bp-note' }, bpClock(x.at) + ' · ' + (x.bv || ''))),
+          h('a', { href: x.url || ('https://www.bilibili.com/video/' + (x.bv || '')), target: '_blank', rel: 'noreferrer' }, '看')))
+          : h('div', { className: 'bp-note' }, '还没回过 —— 点上面的「现在回一轮」试试'),
+        h('div', { className: 'bp-note', style: { marginTop: '8px' } },
+          '指定视频 / 频率 / 数字都在 设置 → 刷B站 →「评论区互动」里改'),
+        toast ? h('div', { className: 'bp-note', style: { marginTop: '6px', color: 'var(--dsw-alias-brand-primary,#4a9eff)' } }, toast) : null,
+      )
       const stateTab = h('div', null,
         h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' },
           h('div', null, '今天挑了 ' + (st ? (st.pickedToday ?? 0) : 0) + ' / ' + (st && st.config ? st.config.perDay : '?') + ' 条'),
@@ -1661,9 +1746,9 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           h('span', { style: { flex: 1 } }),
           h('button', { className: 'bp-btn', onClick: () => setOpen(false) }, '✕')),
         h('div', { className: 'bp-tabs' },
-          [['msg', '消息'], ['state', '状态'], ['ops', '操作']].map(([k, label]) =>
+          [['msg', '消息'], ['comment', '评论区'], ['state', '状态'], ['ops', '操作']].map(([k, label]) =>
             h('button', { key: k, className: 'bp-tab' + (tab === k ? ' on' : ''), onClick: () => setTab(k) }, label))),
-        tab === 'msg' ? msgTab : tab === 'state' ? stateTab : opTab,
+        tab === 'msg' ? msgTab : tab === 'comment' ? commentTab : tab === 'state' ? stateTab : opTab,
       ))
     }
 
