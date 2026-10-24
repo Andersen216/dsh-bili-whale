@@ -157,7 +157,7 @@ ELECTRON_RUN_AS_NODE=1 "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSe
 ## 5. 生效
 
 重启桌面端后版本变成 **0.1.19-mac.3**。
-监听第一次运行仍只记游标（不回历史消息）；之后 @ 一下 `tpd5375` 就能测。
+监听第一次运行仍只记游标（不回历史消息）；之后 @ 一下 `AAA_白饭批发大肥鱼`（曾用名 tpd5375）就能测。
 
 ---
 
