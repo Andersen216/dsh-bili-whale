@@ -1646,6 +1646,8 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       )
       /* ⭐ 2026-10-24 悬浮窗「评论区」页：谁在说、本鱼准备/已经回了什么，都能在这儿看和操作 */
       const ocPend = Array.isArray(ocSt.pending) ? ocSt.pending : []
+      const ocQueue = Array.isArray(ocSt.queue) ? ocSt.queue : ocPend
+      const ocSched = Array.isArray(ocSt.scheduled) ? ocSt.scheduled : []
       const ocRecent = Array.isArray(ocSt.recentReplied) ? ocSt.recentReplied : []
       const ocIgnore = async (item) => {
         try {
@@ -1653,6 +1655,29 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           if (r && r.ok === false) say('忽略失败：' + (r.error || '未知'))
           else { say('已忽略这条'); try { setSt(await bpFetch('/status')) } catch { /* 忽略 */ } }
         } catch (e) { say('忽略失败：' + String(e && e.message || e)) }
+      }
+      /* ⭐ 2026-10-24：对某条未回评论手动「回复」= 让宿主先起草，排到 1~2 分钟后发（不立刻发，防 B站 风控） */
+      const ocReply = async (item) => {
+        if (!item || !item.bv || !item.rpid) return
+        setBusy('oc-reply')
+        say('正在想回复…')
+        try {
+          const r = await bpPost('/own-comment-reply', {
+            bv: item.bv, rpid: item.rpid, root: item.root || 0, mid: item.mid || '',
+            nick: item.nick || '', content: item.content || '', title: item.title || '',
+          })
+          if (!r || !r.ok) say('没排上：' + ((r && r.error) || '未知原因'))
+          else say('想好了：「' + String((r.scheduled && r.scheduled.text) || '').slice(0, 24) + '」 · ' + ((r.scheduled && r.scheduled.etaSec) || 0) + ' 秒后自动发')
+          try { setSt(await bpFetch('/status')) } catch { /* 忽略 */ }
+        } catch (e) { say('失败：' + String(e && e.message || e)) }
+        finally { setBusy('') }
+      }
+      const ocCancel = async (item) => {
+        try {
+          const r = await bpPost('/own-comment-cancel', { id: item.id })
+          if (r && r.ok === false) say('撤回失败：' + (r.error || '未知'))
+          else { say('已撤回'); try { setSt(await bpFetch('/status')) } catch { /* 忽略 */ } }
+        } catch (e) { say('撤回失败：' + String(e && e.message || e)) }
       }
       const ocModeLabel = ocScope === 'off' ? '都关（只写报告）' : ocScope === 'both' ? '我的 + 别人' : '只回我的评论区'
       const commentTab = h('div', null,
@@ -1672,16 +1697,31 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           h('div', { className: 'bp-note', style: { alignSelf: 'center' } }, '总模式：'),
           ...[['own', '只回我的'], ['both', '我的+别人'], ['off', '都关']].map(([v, label]) =>
             h('button', { key: 'sc-' + v, className: 'bp-btn' + (ocScope === v ? ' primary' : ''), disabled: !!busy, onClick: () => { patchCfg('commentScope', v); say('总模式已切到：' + label) } }, label))),
-        // 待回 / 正在回：谁的评论、准备回哪条
+        // ── 🕒 排队发送：已经想好的回复，1~2 分钟后自动发；发之前可以撤回 ──
         h('div', { className: 'bp-note', style: { marginTop: '4px' } },
-          ocSt.busy ? '⏳ 正在回这几条（回复内容生成中…）' : ('待回 ' + ocPend.length + ' 条' + (ocPend.length ? '（下一轮就回它们）' : ''))),
-        ocPend.length ? ocPend.map((x, i) => h('div', { className: 'bp-row', key: 'ocp' + (x.rpid ?? i) },
+          '排队发送 ' + ocSched.length + ' 条'
+          + (ocSched.length ? '（已想好，到点自动发；不许它发太快，是为了防 B站 风控）' : '')),
+        ocSched.length ? ocSched.slice(0, 6).map((x, i) => h('div', { className: 'bp-row', key: 'ocs' + (x.id || i) },
+          h('div', { className: 'bp-body' },
+            h('div', null, (x.kind === 'bubble' ? '🐟 冒泡' : '回 ' + (x.nick || '匿名')) + '：' + (x.text || '')),
+            h('div', { className: 'bp-note' },
+              '还有 ' + bpDur(Math.max(0, Math.round((Number(x.dueAt) - now) / 1000))) + ' 发'
+              + (x.content ? ' · 对方说：' + String(x.content).slice(0, 40) : ''))),
+          h('button', { className: 'bp-btn', disabled: !!busy, onClick: () => ocCancel(x) }, '撤回')))
+          : h('div', { className: 'bp-note' }, '还没有排队的（想好回复会先出现在这儿）'),
+        // ── 💬 待回评论：未被回复的都在这儿，可以逐条「回复 / 忽略」──
+        h('div', { className: 'bp-note', style: { marginTop: '8px' } },
+          (ocSt.busy ? '⏳ 正在起草回复…' : ('未回的评论 ' + ocQueue.length + ' 条' + (ocQueue.length ? '（点「回复」它就会先想好、1~2 分钟后再发）' : '')))),
+        ocQueue.length ? ocQueue.slice(0, 12).map((x, i) => h('div', { className: 'bp-row', key: 'ocq' + (x.rpid ?? i) },
           h('div', { className: 'bp-body' },
             h('div', null, (x.nick || '匿名') + '：' + (x.content || '')),
-            h('div', { className: 'bp-note' }, '《' + (x.title || x.bv || '') + '》' + (x.root ? ' · 楼中楼' : '') + ' · ' + (x.bv || ''))),
+            h('div', { className: 'bp-note' },
+              '《' + (x.title || x.bv || '') + '》' + (x.root ? ' · 楼中楼' : '') + (x.long ? ' · 较长' : '')
+              + (x.error ? ' · 上次发送失败：' + String(x.error).slice(0, 30) : ''))),
+          h('button', { className: 'bp-btn primary', disabled: !!busy || ocSt.busy, onClick: () => ocReply(x) }, '回复'),
           h('button', { className: 'bp-btn', disabled: !!busy, onClick: () => ocIgnore(x) }, '忽略'),
           h('a', { href: 'https://www.bilibili.com/video/' + (x.bv || '') + '#reply' + (x.rpid || ''), target: '_blank', rel: 'noreferrer' }, '看')))
-          : h('div', { className: 'bp-note' }, '没有待回的（我的评论区有新人说话时，下一跳扫到这里）'),
+          : h('div', { className: 'bp-note' }, '没有未回的评论（我评论区有新人说话时，下一跳会出现在这儿）'),
         // 最近回过的：原话 → 本鱼回了啥
         h('div', { className: 'bp-note', style: { marginTop: '8px' } }, '最近回过（' + ocRecent.length + '）'),
         ocRecent.length ? ocRecent.slice(0, 6).map((x, i) => h('div', { className: 'bp-row', key: 'ocr' + (x.rpid ?? i) },
@@ -1712,7 +1752,9 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
             ? '都关（只写报告）'
             : '我的 ' + (ocSt.dayCount ?? 0) + ' 条'
               + (ocScope === 'both' ? ' · 别人最多 ' + (c.otherCommentMax ?? 1) + ' 条' : ' · 别人关'))
-            + (ocSt.busy ? ' · 正在跑' : '') + (ocSt.lastAt ? ' · 上次 ' + bpClock(ocSt.lastAt) : '')))),
+            + (ocSt.busy ? ' · 正在跑' : '')
+            + ' · 排队 ' + (ocSched.length || 0) + ' 条 · 未回 ' + (ocQueue.length || 0) + ' 条'
+            + (ocSt.lastAt ? ' · 上次扫 ' + bpClock(ocSt.lastAt) : '')))),
         h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' },
           h('div', null, '私信通知：' + (st && st.dmLast ? (st.dmLast.ok ? '✅ ' + bpClock(st.dmLast.at) : '❌ ' + (st.dmLast.error || '')) : '还没发过')),
           h('div', { className: 'bp-note' }, '两本日记/报告在设置页「刷B站」里看'))),
