@@ -1711,8 +1711,12 @@ export function apply(ctx, config) {
   }
   const collectStream = async (svc, params) => {
     let raw = ''
+    let failure = null
     const shapes = new Set()
     for await (const ch of svc.stream(params)) {
+      if (ch && ch.type === 'finish' && ch.reason && ch.reason.kind === 'error') {
+        failure = ch.reason.failure || { code: 'UNKNOWN', message: '未知错误' }
+      }
       const t = pickStreamText(ch)
       if (t) raw += t
       else {
@@ -1724,7 +1728,7 @@ export function apply(ctx, config) {
         } catch { /* 忽略 */ }
       }
     }
-    return { raw, shapes: [...shapes] }
+    return { raw, shapes: [...shapes], failure }
   }
 
   const myUid = () => {
@@ -2924,43 +2928,77 @@ export function apply(ctx, config) {
       }
       const fetchedBvs = new Set(scanIds)
       const keptQueue = (st.queue || []).filter((x) => !fetchedBvs.has(String(x.bv)) && !st.doneIds.includes(String(x.rpid)))
+      const oldErr = new Map((st.queue || []).filter((x) => x && x.error).map((x) => [`${x.bv}:${x.rpid}`, x.error]))
+      for (const x of freshQueue) { const e = oldErr.get(`${x.bv}:${x.rpid}`); if (e) x.error = e }
       st.queue = [...freshQueue, ...keptQueue].slice(-80)
       st.lastScan = { at: Date.now(), videos: chosen.map((v) => ({ bv: v.bvid, title: v.title || '', kind: v.kind })), comments: nComments, skipped, errors: errors.slice(0, 5) }
       if (errors.length) log(`回自己评论区：有 ${errors.length} 条视频没抓到评论（${errors[0]}）`)
 
+      // ⭐ 2026-10-25：自动重试也花钱 —— 起草失败/判不回的，30 分钟内不再自动试（手动点「回复」不受限）
+      st.draftFail = st.draftFail && typeof st.draftFail === 'object' ? st.draftFail : {}
+      const nowMs = Date.now()
+      const pickedAuto = picked.filter((c) => {
+        const f = st.draftFail[`${c.bv}:${c.rpid}`]
+        return !(f && nowMs - Number(f.at || 0) < 30 * 60_000)
+      })
+
       // ④ 有可回的 → **先起草**，排到 1~2 分钟后发（主人要求：不要立刻发出去）
-      if (picked.length) {
+      if (pickedAuto.length) {
         // 悬浮窗要在"起草中"时看到是谁
-        st.pendingPreview = picked.map((c) => ({
+        st.pendingPreview = pickedAuto.map((c) => ({
           at: Date.now(), bv: c.bv, rpid: c.rpid, root: c.root || 0,
           nick: c.nick || c.uname || '匿名', content: String(c.content || '').slice(0, 120),
           title: c.title || '', kind: c.kind || 'owner',
         }))
         ownWriteJson(st)
         const drafts = []
-        for (const c of picked) {
+        const skipIdsNow = []
+        const failedNow = []
+        for (const c of pickedAuto) {
           try {
             const qr = await quickReply({
               bv: c.bv, title: c.title || '', rpid: c.rpid, root: c.root || 0,
               nick: c.nick || c.uname || '匿名', content: String(c.content || '').slice(0, 400),
             })
             const text = String(qr?.reply || '').trim()
-            if (!text) { log(`起草：这条先不回（判成不接）：${String(c.content || '').slice(0, 30)}`); continue }
+            if (!text) {
+              skipIdsNow.push(String(c.rpid))
+              st.draftFail[`${c.bv}:${c.rpid}`] = { at: Date.now(), why: '判成不接' }
+              log(`起草：这条先不回（判成不接，已标记跳过）：${String(c.content || '').slice(0, 30)}`)
+              continue
+            }
             drafts.push({
               id: `auto:${c.bv}:${c.rpid}`, kind: 'reply', bv: c.bv, rpid: c.rpid, root: c.root || 0,
               mid: c.mid || '', nick: c.nick || c.uname || '匿名', content: c.content || '', title: c.title || '', text,
             })
-          } catch (e) { log(`起草回复失败（这条先不发）：${e?.message ?? e}`) }
+          } catch (e) {
+            failedNow.push({ bv: c.bv, rpid: Number(c.rpid), msg: String(e?.message ?? e) })
+            st.draftFail[`${c.bv}:${c.rpid}`] = { at: Date.now(), why: '起草失败' }
+            log(`起草回复失败（这条先不发）：${e?.message ?? e}`)
+          }
         }
         const s0 = ownState()
         s0.pendingPreview = []
+        s0.draftFail = st.draftFail
+        if (skipIdsNow.length) s0.doneIds = [...new Set([...(s0.doneIds || []), ...skipIdsNow])].slice(-2000)
+        const okKeys = new Set(drafts.map((d) => `${d.bv}:${d.rpid}`))
+        if (failedNow.length) {
+          const failMap = new Map(failedNow.map((f) => [`${f.bv}:${f.rpid}`, f.msg]))
+          s0.queue = (s0.queue || []).map((x) => failMap.has(`${x.bv}:${x.rpid}`) ? { ...x, error: failMap.get(`${x.bv}:${x.rpid}`) } : x)
+        }
+        s0.queue = (s0.queue || []).filter((x) => !okKeys.has(`${x.bv}:${x.rpid}`))
         ownWriteJson(s0)
         ownBusy = false
         if (!drafts.length) {
           const s1 = ownState()
-          s1.lastResult = { at: Date.now(), ok: true, what: '起草没通过', count: 0, note: '这一批都判成"先不回"' }
+          s1.lastResult = {
+            at: Date.now(), ok: false,
+            what: failedNow.length ? '起草失败' : '判成不回',
+            count: 0,
+            note: failedNow.length ? ('失败：' + String(failedNow[0].msg).slice(0, 80)) : '这一批都判成"先不回"，已标记跳过（不会再重复出现）',
+          }
           ownWriteJson(s1); ownLast = s1.lastResult
-          return { started: false, error: '这批评论模型判断先不回（攻击 / 不接），已跳过' }
+          return { started: false, error: failedNow.length ? ('起草失败：' + String(failedNow[0].msg).slice(0, 60)) : '这批评论模型判断先不回，已标记跳过' }
         }
         const items = scheduleOwnDrafts(drafts)
         const s2 = ownState()
@@ -3152,10 +3190,13 @@ export function apply(ctx, config) {
     const got = await collectStream(svc, {
       provider, model,
       ...(effort ? { reasoningEffort: effort } : {}),
-      system,
-      messages: [{ role: 'user', content: userMsg }],
+      messages: [
+        { role: 'system', content: [{ type: 'text', text: system }] },
+        { role: 'user', content: [{ type: 'text', text: userMsg }] },
+      ],
     })
     const raw = got.raw
+    if (!raw && got.failure) throw new Error('模型调用失败：' + String(got.failure.code || '') + ' ' + String(got.failure.message || '').slice(0, 120))
     const m = /\{[\s\S]*\}/.exec(raw)
     if (!m) throw new Error('模型没给出 JSON（' + raw.slice(0, 80) + '）' + (got.shapes.length ? '；流形状=' + got.shapes.join(' / ') : '；流里没有文本 chunk'))
     const obj = JSON.parse(m[0])
@@ -3194,8 +3235,12 @@ export function apply(ctx, config) {
     const got = await collectStream(svc, {
       provider, model,
       ...(effort ? { reasoningEffort: effort } : {}),
-      system, messages: [{ role: 'user', content: userMsg }],
+      messages: [
+        { role: 'system', content: [{ type: 'text', text: system }] },
+        { role: 'user', content: [{ type: 'text', text: userMsg }] },
+      ],
     })
+    if (!got.raw && got.failure) throw new Error('模型调用失败：' + String(got.failure.code || '') + ' ' + String(got.failure.message || '').slice(0, 120))
     const raw = got.raw
     let text = String(raw || '').replace(/```[a-z]*/gi, '').replace(/[`"]/g, '')
       .split(/\r?\n/).map((x) => x.trim()).filter(Boolean)[0] || ''

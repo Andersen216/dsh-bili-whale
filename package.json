@@ -1,6 +1,6 @@
 {
   "name": "dsh-bili-whale",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "DSH 插件（dsh-bili-scroll 的 macOS 魔改分支）：每天替你刷 B站、读字幕挑视频、写日报，能在评论区回 @、主动巡逻、主界面面板里引导回复",
   "keywords": [
     "dsh",
