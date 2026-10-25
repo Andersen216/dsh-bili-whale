@@ -2468,10 +2468,13 @@ export function apply(ctx, config) {
   }
 
   /** 把一批起草好的回复排进发送队列（不立刻发） */
-  const scheduleOwnDrafts = (drafts) => {
+  const scheduleOwnDrafts = (drafts, opts = {}) => {
     if (!drafts || !drafts.length) return []
     const st = ownState()
-    const due = planReplyDueTimes({ now: Date.now(), count: drafts.length, lastSendAt: Number(st.lastReplySendAt || 0) })
+    const ownImmediate = Boolean(opts && opts.immediate)
+    const due = ownImmediate
+      ? drafts.map((_, i) => Date.now() + 2000 + i * 4000)
+      : planReplyDueTimes({ now: Date.now(), count: drafts.length, lastSendAt: Number(st.lastReplySendAt || 0) })
     const items = drafts.map((d, i) => ({
       id: String(d.id || `${d.bv}:${d.rpid}:${Date.now()}-${i}`),
       kind: d.kind || 'reply',
@@ -2481,6 +2484,7 @@ export function apply(ctx, config) {
       title: String(d.title || '').slice(0, 80),
       text: String(d.text || '').slice(0, 200),
       dueAt: due[i], createdAt: Date.now(),
+      ...(ownImmediate ? { force: true } : {}),
     })).filter((x) => x.text && x.bv)
     st.scheduled = [...(st.scheduled || []), ...items].slice(-30)
     ownWriteJson(st)
@@ -2495,10 +2499,11 @@ export function apply(ctx, config) {
       const st0 = ownState()
       if (!st0.scheduled.length) return
       const now = Date.now()
-      if (now - Number(st0.lastReplySendAt || 0) < REPLY_GAP_MIN_MS) return
       const due = st0.scheduled.filter((x) => Number(x.dueAt) <= now).sort((a, b) => Number(a.dueAt) - Number(b.dueAt))
       if (!due.length) return
-      const item = due[0]
+      const forceDue = due.find((x) => x && x.force)
+      if (!forceDue && now - Number(st0.lastReplySendAt || 0) < REPLY_GAP_MIN_MS) return
+      const item = forceDue || due[0]
       ownSending = true
       const args = { bvid: item.bv, text: item.text, rpid: Number(item.rpid) || 0 }
       if (item.root) args.root = Number(item.root)
@@ -2631,8 +2636,8 @@ export function apply(ctx, config) {
     // ② 两个号的最近投稿（缓存 30 分钟）
     const videos = []
     const want = [
-      { key: 'owner', uid: Number(cfg.ownerUid || 0), ps: 10 },
-      { key: 'self', uid: Number(myUid() || 0), ps: 5 },
+      { key: 'self', uid: Number(myUid() || 0), ps: 50 },
+      { key: 'owner', uid: Number(cfg.ownerUid || 0), ps: 50 },
     ]
     for (const w of want) {
       if (!w.uid) continue
@@ -2662,8 +2667,11 @@ export function apply(ctx, config) {
       seen.add(key)
       dedup.push(v)
     }
-    if (pinned) return [{ ...pinned, kind: 'pinned' }, ...dedup.filter((v) => String(v.bvid) !== String(pinned.bvid))]
-    return dedup
+    let out = dedup
+    if (pinned) out = [{ ...pinned, kind: 'pinned' }, ...dedup.filter((v) => String(v.bvid) !== String(pinned.bvid))]
+    const fv = st.forceVideo && st.forceVideo.bvid ? st.forceVideo : null
+    if (fv) out = [{ ...fv, kind: 'force' }, ...out.filter((v) => String(v.bvid) !== String(fv.bvid))]
+    return out
   }
 
   /** 解析「指定视频」：标题关键词或 BV（结果写 st.pinned，返回 { video, error }） */
@@ -2842,6 +2850,7 @@ export function apply(ctx, config) {
       const toFetch = []
       const pushFetch = (v) => { if (v && !toFetch.some((x) => String(x.bvid) === String(v.bvid))) toFetch.push(v) }
       pushFetch(videos.find((v) => v.kind === 'pinned'))
+      pushFetch(videos.find((v) => v.kind === 'force'))
       pushFetch(byBv.get(String(st.hotBv || '')))
       const changed = videos.filter((v) => {
         const prev = st.commentCountByBv[String(v.bvid)]
@@ -2852,8 +2861,10 @@ export function apply(ctx, config) {
         .filter((v) => Date.now() - Number(st.lastCheckByBv[String(v.bvid)] || 0) > 10 * 60_000)
         .sort((a, b) => Number(st.lastCheckByBv[String(a.bvid)] || 0) - Number(st.lastCheckByBv[String(b.bvid)] || 0))
       for (const v of stale) pushFetch(v)
-      const fetchCap = Math.max(1, Math.min(maxVideos, 3))
+      const fetchCap = st.scanAll ? Math.min(videos.length, 10) : Math.max(1, Math.min(maxVideos, 8))
       const chosen = toFetch.slice(0, fetchCap)
+      if (st.scanAll) st.scanAll = false
+      if (st.forceVideo) st.forceVideo = null
       // ② 抓这批视频的最新评论（Python 一次抓完；主评论接口自带楼中楼，一起带回来）
       const results = {}
       if (chosen.length) {
@@ -3845,22 +3856,72 @@ export function apply(ctx, config) {
         })
         const text = String(qr?.reply || '').trim()
         if (!text) return sendJson(res, 200, { ok: false, error: '模型这次没写出来（可能判成不该回）—— 换一条试试' })
+        const immediate = Boolean(body.immediate)
         const items = scheduleOwnDrafts([{
           id: `manual:${bv}:${rpid}:${Date.now()}`, kind: 'reply', bv, rpid,
           root: Number(item.root) || 0, mid: item.mid || '', nick: item.nick || '匿名',
           content: item.content || '', title: item.title || '', text,
-        }])
+        }], { immediate })
         const it = items[0]
         if (!it) return sendJson(res, 200, { ok: false, error: '排期失败（状态写不进去？）' })
         const s2 = ownState()
         s2.queue = (s2.queue || []).filter((x) => !(String(x.bv) === bv && Number(x.rpid) === rpid))
-        s2.lastResult = { at: Date.now(), ok: true, what: '手动起草，排队等发送', count: 1, etaSec: Math.max(1, Math.round((Number(it.dueAt) - Date.now()) / 1000)), targets: [{ bv, nick: it.nick }] }
+        s2.lastResult = { at: Date.now(), ok: true, what: immediate ? '手动回复，几秒后发' : '手动起草，排队等发送', count: 1, etaSec: Math.max(1, Math.round((Number(it.dueAt) - Date.now()) / 1000)), targets: [{ bv, nick: it.nick }] }
         ownWriteJson(s2)
         log(`手动回复：已起草给 ${it.nick} 的回复，${Math.round((it.dueAt - Date.now()) / 1000)} 秒后发`)
         return sendJson(res, 200, {
           ok: true,
           scheduled: { id: it.id, text: it.text, dueAt: it.dueAt, etaSec: Math.max(1, Math.round((Number(it.dueAt) - Date.now()) / 1000)) },
         })
+      } catch (e) { return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) }) }
+    }
+
+    // ⭐ 2026-10-25：扫指定视频（悬浮窗粘贴 BV/链接 → 抓这条视频的评论区，优先回）
+    if (req.method === 'POST' && path === '/api/bili-duty/own-comment-scan-video') {
+      try {
+        const body = await readBody(req)
+        const raw = String(body.url || body.bvid || '').trim()
+        const m = /BV[0-9A-Za-z]{10}/.exec(raw)
+        if (!m) return sendJson(res, 200, { ok: false, error: '没认出 BV 号（粘贴视频链接或 BV 号）' })
+        const bvid = m[0]
+        const info = await callBiliPy('bili_video_info', { bvid })
+        const title = String(info?.title || '')
+        const aid = Number(info?.aid || 0) || 0
+        const st = ownState()
+        st.forceVideo = { bvid, bv: bvid, title, aid, uid: Number(info?.owner_mid || 0) || 0, kind: 'force' }
+        st.lastCheckByBv = { ...(st.lastCheckByBv || {}), [bvid]: 0 }
+        ownWriteJson(st)
+        const r = await runOwnCommentRound('manual')
+        const s3 = ownState(); s3.forceVideo = null; ownWriteJson(s3)
+        log(`扫指定视频：${bvid}《${title}》 → ${r.started ? '已起火 ' + (r.count || 0) + ' 条' : '没回成（' + (r.error || '未知') + '）'}`)
+        return sendJson(res, 200, { ok: Boolean(r.started), bvid, title, error: r.error, ...r })
+      } catch (e) { return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) }) }
+    }
+
+    // ⭐ 2026-10-25：扫全部视频（本鱼号 + 主人号，本鱼优先）
+    if (req.method === 'POST' && path === '/api/bili-duty/own-comment-scan-all') {
+      try {
+        const st = ownState(); st.scanAll = true; ownWriteJson(st)
+        const r = await runOwnCommentRound('manual')
+        const s3 = ownState(); s3.scanAll = false; ownWriteJson(s3)
+        log(`扫全部视频：${r.started ? '已起火 ' + (r.count || 0) + ' 条' : '没回成（' + (r.error || '未知') + '）'}`)
+        return sendJson(res, 200, { ok: Boolean(r.started), ...r })
+      } catch (e) { return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) }) }
+    }
+
+    // ⭐ 2026-10-25：视频列表（悬浮窗显示"抓到哪些视频"）
+    if (req.method === 'GET' && path === '/api/bili-duty/own-videos') {
+      try {
+        const st = ownState()
+        const selfUid = String(myUid() || '')
+        const ownerUid = String(cfg.ownerUid || '')
+        const out = []
+        for (const [uid, cache] of Object.entries(st.videos || {})) {
+          const kind = uid === selfUid ? 'self' : uid === ownerUid ? 'owner' : 'other'
+          for (const v of (cache && cache.list) || []) out.push({ bvid: v.bvid, title: v.title, kind, play: v.play, comment: v.comment })
+        }
+        out.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'self' ? -1 : 1))
+        return sendJson(res, 200, { ok: true, videos: out.slice(0, 100), selfUid, ownerUid })
       } catch (e) { return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) }) }
     }
 

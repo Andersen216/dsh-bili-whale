@@ -996,7 +996,7 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
            而且每个视频最多回一句。字段名/范围以 docs/own-comments.md 第六节为准。 */
         h('div', { 'data-bd-sec': '' },
           h('div', { 'data-bd-h': '' }, '评论区互动（我的 / 别人的）'),
-          h('div', { 'data-bd-note': '' }, '分三类：① 自家人评论区（我的视频 + 主人视频）—— 默认全回；② @ 本鱼 / 回复本鱼 —— 只在本鱼或主人视频下回，别人视频里不回；③ 别人视频评论区 —— 默认关（不打扰别人）。频率越低越省钱。'),
+          h('div', { 'data-bd-note': '' }, '分三类：① 自家人评论区（我的视频 + 主人视频）—— 默认全回；② @ 本鱼 / 回复本鱼 —— 只在本鱼或主人视频下回，别人视频里不回；③ 别人视频评论区 —— 默认关（不打扰别人）。频率越低越省钱。\n日常操作用左下角「🐋 → 回评论」：能看未回评论、点「立即回」马上回、点「扫全部视频」抓本鱼号+主人号所有视频、也可以直接粘贴视频链接只扫那一条。'),
           h('div', { 'data-bd-label': '' }, '总模式'),
           h('div', { 'data-bd-row': '', style: { flexWrap: 'wrap', alignItems: 'flex-start' } },
             ...COMMENT_SCOPES.map(([v, label, note]) => h('div', {
@@ -1520,6 +1520,7 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const [now, setNow] = React.useState(Date.now())
       const [guideFor, setGuideFor] = React.useState(null)
       const [guideText, setGuideText] = React.useState('')
+      const [videoLink, setVideoLink] = React.useState('')
       // ⭐ 2026-10-21 主人要的：面板可拖拽（左下角圆钮打开，位置随意拖）
       const [pos, setPos] = React.useState(() => ({
         x: 18,
@@ -1656,17 +1657,18 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           else { say('已忽略这条'); try { setSt(await bpFetch('/status')) } catch { /* 忽略 */ } }
         } catch (e) { say('忽略失败：' + String(e && e.message || e)) }
       }
-      const ocReply = async (item) => {
+      const ocReply = async (item, immediate) => {
         if (!item || !item.bv || !item.rpid) return
         setBusy('oc-reply')
-        say('正在想回复…')
+        say(immediate ? '正在想 + 马上发…' : '正在想回复…')
         try {
           const r = await bpPost('/own-comment-reply', {
             bv: item.bv, rpid: item.rpid, root: item.root || 0, mid: item.mid || '',
             nick: item.nick || '', content: item.content || '', title: item.title || '',
+            immediate: Boolean(immediate),
           })
           if (!r || !r.ok) say('没排上：' + ((r && r.error) || '未知原因'))
-          else say('想好了：「' + String((r.scheduled && r.scheduled.text) || '').slice(0, 24) + '」 · ' + ((r.scheduled && r.scheduled.etaSec) || 0) + ' 秒后自动发')
+          else say((immediate ? '已写好，几秒后发：「' : '想好了：「') + String((r.scheduled && r.scheduled.text) || '').slice(0, 24) + '」 · ' + ((r.scheduled && r.scheduled.etaSec) || 0) + ' 秒后自动发')
           try { setSt(await bpFetch('/status')) } catch { /* 忽略 */ }
         } catch (e) { say('失败：' + String(e && e.message || e)) }
         finally { setBusy('') }
@@ -1691,7 +1693,29 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           h('div', { className: 'bp-note', style: { alignSelf: 'center' } }, '范围：'),
           ...[['own', '我的+主人'], ['off', '都关']].map(([v, label]) =>
             h('button', { key: 'sc-' + v, className: 'bp-btn' + (ocScope === v ? ' primary' : ''), disabled: !!busy, onClick: () => { patchCfg('commentScope', v); say('范围已切到：' + label) } }, label))),
-        h('div', { className: 'bp-note', style: { marginTop: '4px' } },
+        h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '2px 0 8px' } },
+          h('button', { className: 'bp-btn', disabled: !!busy || !!ocSt.busy, onClick: () => doRun('扫全部视频', '/own-comment-scan-all') }, '扫全部视频'),
+          h('input', {
+            className: 'bp-in', placeholder: '粘贴视频链接 / BV 号…', value: videoLink,
+            onChange: (e) => setVideoLink(e.target.value), style: { flex: '1 1 220px', minWidth: '180px' },
+          }),
+          h('button', {
+            className: 'bp-btn', disabled: !!busy || !String(videoLink || '').trim(),
+            onClick: async () => {
+              const raw = String(videoLink || '').trim()
+              if (!raw) return
+              setBusy('scan-video')
+              say('正在扫这条视频的评论区…')
+              try {
+                const r = await bpPost('/own-comment-scan-video', { url: raw })
+                if (!r || !r.ok) say('扫视频失败：' + ((r && r.error) || '未知原因'))
+                else { say('已扫《' + ((r.title || r.bvid || '').slice(0, 26)) + '》'); setVideoLink('') }
+                try { setSt(await bpFetch('/status')) } catch { /* 忽略 */ }
+              } catch (e) { say('失败：' + String(e && e.message || e)) }
+              finally { setBusy('') }
+            },
+          }, '扫这条视频')),
+        h('div', { className: 'bp-note', style: { margin: '6px 0 2px' } },
           '① 排队发送 ' + ocSched.length + ' 条' + (ocSched.length ? '（已想好，1~2 分钟后自动发，防风控）' : '')),
         ocSched.length ? ocSched.slice(0, 6).map((x, i) => h('div', { className: 'bp-row', key: 'ocs' + (x.id || i) },
           h('div', { className: 'bp-body' },
@@ -1708,7 +1732,8 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
             h('div', { className: 'bp-body' },
               h('div', null, (x.nick || '匿名') + '：' + (x.content || '')),
               h('div', { className: 'bp-note' }, why + ' · 《' + (x.title || x.bv || '') + '》' + (x.root ? ' · 楼中楼' : ''))),
-            h('button', { className: 'bp-btn primary', disabled: !!busy || ocSt.busy, onClick: () => ocReply(x) }, '回复'),
+            h('button', { className: 'bp-btn primary', disabled: !!busy || ocSt.busy, onClick: () => ocReply(x, true) }, '立即回'),
+            h('button', { className: 'bp-btn', disabled: !!busy || ocSt.busy, onClick: () => ocReply(x, false) }, '稍后'),
             h('button', { className: 'bp-btn', disabled: !!busy, onClick: () => ocIgnore(x) }, '忽略'),
             h('a', { href: 'https://www.bilibili.com/video/' + (x.bv || '') + '#reply' + (x.rpid || ''), target: '_blank', rel: 'noreferrer' }, '看'))
         }) : h('div', { className: 'bp-note' }, '（空 —— 我的评论区有新评论时，会先出现在这里）'),
