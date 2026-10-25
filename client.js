@@ -1050,6 +1050,12 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
               on: cfg.ownCommentAtOwner ?? true,
               onChange: (v) => patch({ ownCommentAtOwner: v }, '@ 主人'),
             }),
+            h(ToggleRow, {
+              label: '只在本鱼 / 主人视频下回 @',
+              note: '默认开：别人视频里被 @ 或回复都不再回（防止跑去别人评论区）；关掉才会回别人的视频',
+              on: cfg.replyOnlyOwnVideos ?? true,
+              onChange: (v) => patch({ replyOnlyOwnVideos: v }, '只在自家视频回 @'),
+            }),
             h('div', { 'data-bd-row': '' },
               h('button', {
                 'data-bd-btn': '', 'data-primary': '',

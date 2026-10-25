@@ -163,6 +163,8 @@ export const Config = !z ? undefined : z.object({
   ownBubbleMaxPerDay: z.number().default(2).extra('volatile', true),
   /** 冒泡 / 回复时纯文本 @ 主人 */
   ownCommentAtOwner: z.boolean().default(true).extra('volatile', true),
+  /** ⭐ 2026-10-25：@ 回复也只在「本鱼 / 主人」的视频下回；别人视频里被 @ 一律不回 */
+  replyOnlyOwnVideos: z.boolean().default(true).extra('volatile', true),
   /** 别人评论区最多互动几句（只在 commentScope=both 时生效，1–3） */
   otherCommentMax: z.number().default(1).extra('volatile', true),
   /** 在别人评论区回话时，自然带一句「替主人被迫营业做宣传」的引导（不硬广、最多一句） */
@@ -348,6 +350,7 @@ export function apply(ctx, config) {
     if ('videoBlacklist' in p) p.videoBlacklist = String(p.videoBlacklist || '').slice(0, 400)
     if ('loopEveryMin' in p) p.loopEveryMin = Math.max(0, Math.min(Number(p.loopEveryMin) || 0, 240))
     if ('watchMentions' in p) p.watchMentions = Boolean(p.watchMentions)
+    if ('replyOnlyOwnVideos' in p) p.replyOnlyOwnVideos = Boolean(p.replyOnlyOwnVideos)
     if ('tz' in p) p.tz = normalizeTz(p.tz)
     // ⭐ 2026-10-20：模型 / 强度（留空 = 跟随主界面；强度只认这四个 + 空）
     if ('dutyEffort' in p) p.dutyEffort = ['', 'off', 'low', 'high', 'max'].includes(String(p.dutyEffort)) ? String(p.dutyEffort) : 'low'
@@ -1676,6 +1679,54 @@ export function apply(ctx, config) {
       return c && c.sessdata ? c : null
     } catch { return null }
   }
+  /* ⭐ 2026-10-25：@ 回复只在自家/主人视频下 —— 视频归属查询（带 30 分钟缓存，查不到就不拦） */
+  const videoOwnerCache = new Map()
+  const mentionHereAllowed = async (item, cred) => {
+    const bv = String(item?.bv || '')
+    if (!bv) return true
+    let mid = 0
+    const hit = videoOwnerCache.get(bv)
+    if (hit && Date.now() - hit.at < 30 * 60_000) mid = hit.mid
+    else {
+      const r = await biliGetJson(`https://api.bilibili.com/x/web-interface/view?bvid=${bv}`, cred).catch(() => null)
+      mid = Number(r?.data?.owner?.mid || 0)
+      if (mid) videoOwnerCache.set(bv, { at: Date.now(), mid })
+    }
+    if (!mid) return true
+    const self = Number(myUid() || 0)
+    const owner = Number(cfg.ownerUid || 0)
+    return mid === self || (owner > 0 && mid === owner)
+  }
+
+  /** 从 llm 流里取文本：宿主可能给 {type:'text-delta',text} 或 {type:'chunk',chunk:{...}}（0.3.1 修「模型没给出 JSON」） */
+  const pickStreamText = (x) => {
+    if (!x) return ''
+    if (typeof x === 'string') return x
+    if (typeof x.text === 'string' && (x.type === 'text-delta' || x.type === 'text' || x.type === undefined)) return x.text
+    if (x.chunk) { const t = pickStreamText(x.chunk); if (t) return t }
+    if (x.frame) { const t = pickStreamText(x.frame); if (t) return t }
+    if (x.delta) { const t = typeof x.delta === 'string' ? x.delta : pickStreamText(x.delta); if (t) return t }
+    if (x.content) { const t = pickStreamText(x.content); if (t) return t }
+    return ''
+  }
+  const collectStream = async (svc, params) => {
+    let raw = ''
+    const shapes = new Set()
+    for await (const ch of svc.stream(params)) {
+      const t = pickStreamText(ch)
+      if (t) raw += t
+      else {
+        try {
+          const shape = ch && typeof ch === 'object'
+            ? Object.keys(ch).join(',') + '|type=' + String(ch.type) + (ch.chunk ? '|chunk:' + String(ch.chunk?.type) : '')
+            : typeof ch
+          if (shapes.size < 8) shapes.add(shape)
+        } catch { /* 忽略 */ }
+      }
+    }
+    return { raw, shapes: [...shapes] }
+  }
+
   const myUid = () => {
     try { return String(readJson(join(stateDir, 'bili_credential.json'), {}).dedeuserid || '') } catch { return '' }
   }
@@ -2073,6 +2124,23 @@ export function apply(ctx, config) {
         seen.add(k)
         return true
       }).sort((a, b) => a.when - b.when)      // 一次序：最旧的先回
+      // ⭐ 2026-10-25：只在「本鱼 / 主人」的视频下回 @；别人视频里被 @ 一律跳过（开关 replyOnlyOwnVideos）
+      const rejectedOther = []
+      if (cfg.replyOnlyOwnVideos) {
+        const kept = []
+        for (const c of candidates) {
+          if (kept.length >= 3) break
+          let ok = true
+          try { ok = await mentionHereAllowed(c, cred) } catch { ok = true }
+          if (ok) kept.push(c)
+          else if (rejectedOther.length < 200) rejectedOther.push(c)
+        }
+        if (rejectedOther.length) {
+          log(`@ 监听：跳过 ${rejectedOther.length} 条别人视频下的消息（只在自家/主人视频下回）`)
+          candidates.length = 0
+          for (const c of kept) candidates.push(c)
+        }
+      }
       if (skipped.length) log(`@ 监听：${skipped.length} 条像攻击/索要隐私（${[...new Set(skipped.map((x) => x.bv))].join(',')}），按规矩直接不回`)
       const newestAt = Math.max(Number(sd.at || 0), ...atAll.map((x) => x.id), 0)
       const newestReply = Math.max(Number(sd.reply || 0), ...rpAll.map((x) => x.id), 0)
@@ -2104,6 +2172,10 @@ export function apply(ctx, config) {
         catchDay: todayBj,
         catchCount: why === '补回' ? catchCount + 1 : catchCount,
         updatedAt: new Date().toISOString(),
+      }
+      if (rejectedOther.length) {
+        const rejIds = rejectedOther.map((x) => String(x.id))
+        nextState.repliedIds = [...new Set([...nextState.repliedIds, ...rejIds])].slice(-300)
       }
       if (firstRun) {
         const baseIds = [...new Set([...atAll, ...rpAll].map((x) => String(x.id)))].slice(-300)
@@ -2365,6 +2437,7 @@ export function apply(ctx, config) {
     return st
   }
   let ownBusy = false
+  let ownCapLogAt = 0
   let ownFailUntil = 0
   let ownLast = null
 
@@ -2736,7 +2809,10 @@ export function apply(ctx, config) {
       const maxDay = Math.max(0, Number(cfg.ownCommentMaxPerDay) || 0)
       const pendingSends = Array.isArray(st.scheduled) ? st.scheduled.length : 0
       if (st.dayCount + pendingSends >= maxDay) {
-        log(`回自己评论区：今天已经回了 ${st.dayCount} 条、还有 ${pendingSends} 条在队列里（上限 ${maxDay}）`)
+        if (Date.now() - ownCapLogAt > 30 * 60_000) {
+          ownCapLogAt = Date.now()
+          log(`回自己评论区：今天已经回了 ${st.dayCount} 条、还有 ${pendingSends} 条在队列里（上限 ${maxDay}）`)
+        }
         return { started: false, error: `今天的额度用完了（已回 ${st.dayCount} + 排队 ${pendingSends} / ${maxDay} 条）` }
       }
       ownBusy = true
@@ -3073,17 +3149,15 @@ export function apply(ctx, config) {
       + `${owner ? '【主人本人】' : '【陌生人】'}说：「${String(item.content || '').slice(0, 200)}」`
       + (contextBlock ? '\n\n' + contextBlock : '')
       + (guide ? '\n\n主人对这条的指示（照这个写）：' + String(guide).slice(0, 200) : '')
-    let raw = ''
-    for await (const ch of svc.stream({
+    const got = await collectStream(svc, {
       provider, model,
       ...(effort ? { reasoningEffort: effort } : {}),
       system,
       messages: [{ role: 'user', content: userMsg }],
-    })) {
-      if (ch && ch.type === 'text-delta' && ch.text) raw += ch.text
-    }
+    })
+    const raw = got.raw
     const m = /\{[\s\S]*\}/.exec(raw)
-    if (!m) throw new Error('模型没给出 JSON（' + raw.slice(0, 80) + '）')
+    if (!m) throw new Error('模型没给出 JSON（' + raw.slice(0, 80) + '）' + (got.shapes.length ? '；流形状=' + got.shapes.join(' / ') : '；流里没有文本 chunk'))
     const obj = JSON.parse(m[0])
     return {
       reply: String(obj.reply || '').trim(),
@@ -3117,12 +3191,12 @@ export function apply(ctx, config) {
       + bubbleAvoidLine(st.recentBubbles)
       + (atOwner ? `\n写的时候在评论末尾加纯文本「@${ownerName}」（让主人看到本鱼来过）。` : '')
       + `\n写一条冒泡评论。`
-    let raw = ''
-    for await (const ch of svc.stream({
+    const got = await collectStream(svc, {
       provider, model,
       ...(effort ? { reasoningEffort: effort } : {}),
       system, messages: [{ role: 'user', content: userMsg }],
-    })) { if (ch && ch.type === 'text-delta' && ch.text) raw += ch.text }
+    })
+    const raw = got.raw
     let text = String(raw || '').replace(/```[a-z]*/gi, '').replace(/[`"]/g, '')
       .split(/\r?\n/).map((x) => x.trim()).filter(Boolean)[0] || ''
     text = text.trim().slice(0, 60)
@@ -3830,7 +3904,8 @@ export function apply(ctx, config) {
         'keywords', 'pythonPath', 'dshBin', 'headlessProfile', 'workspace', 'reportLevel', 'replyToComments', 'replyPerRound',
         // ⭐ 2026-10-24 评论区互动
         'commentScope', 'ownComment', 'ownCommentEverySec', 'ownCommentMaxVideos', 'ownCommentMaxPerRun', 'ownCommentMaxPerDay',
-        'ownCommentQuestionOnly', 'ownBubble', 'ownBubbleMaxPerDay', 'ownCommentAtOwner', 'otherCommentMax', 'otherPromo', 'pinnedVideo']) {
+        'ownCommentQuestionOnly', 'ownBubble', 'ownBubbleMaxPerDay', 'ownCommentAtOwner', 'otherCommentMax', 'otherPromo', 'pinnedVideo',
+        'replyOnlyOwnVideos']) {
         if (k in body) patch[k] = body[k]
       }
       // ⭐ 范围钳制 + 两份都写（config.json / DSH 原生设置页），统一走 persistCfg —— 见文件上方
