@@ -154,7 +154,7 @@ export const Config = !z ? undefined : z.object({
   /** 每次最多回几条（1–5） */
   ownCommentMaxPerRun: z.number().default(5).extra('volatile', true),
   /** 每天最多回几条（0–100） */
-  ownCommentMaxPerDay: z.number().default(200).extra('volatile', true),
+  ownCommentMaxPerDay: z.number().default(500).extra('volatile', true),
   /** 只回提问的（默认关：谁说话都接） */
   ownCommentQuestionOnly: z.boolean().default(false).extra('volatile', true),
   /** 没新评论时冒个泡（发一条新评论） */
@@ -165,6 +165,8 @@ export const Config = !z ? undefined : z.object({
   ownCommentAtOwner: z.boolean().default(true).extra('volatile', true),
   /** ⭐ 2026-10-25：@ 回复也只在「本鱼 / 主人」的视频下回；别人视频里被 @ 一律不回 */
   replyOnlyOwnVideos: z.boolean().default(true).extra('volatile', true),
+  /** ⭐ 2026-10-25：回复间隔（开=每条隔 1~2 分钟，防风控；关=想好就尽快发） */
+  ownReplyGap: z.boolean().default(true).extra('volatile', true),
   /** 别人评论区最多互动几句（只在 commentScope=both 时生效，1–3） */
   otherCommentMax: z.number().default(1).extra('volatile', true),
   /** 在别人评论区回话时，自然带一句「替主人被迫营业做宣传」的引导（不硬广、最多一句） */
@@ -351,6 +353,7 @@ export function apply(ctx, config) {
     if ('loopEveryMin' in p) p.loopEveryMin = Math.max(0, Math.min(Number(p.loopEveryMin) || 0, 240))
     if ('watchMentions' in p) p.watchMentions = Boolean(p.watchMentions)
     if ('replyOnlyOwnVideos' in p) p.replyOnlyOwnVideos = Boolean(p.replyOnlyOwnVideos)
+    if ('ownReplyGap' in p) p.ownReplyGap = Boolean(p.ownReplyGap)
     if ('tz' in p) p.tz = normalizeTz(p.tz)
     // ⭐ 2026-10-20：模型 / 强度（留空 = 跟随主界面；强度只认这四个 + 空）
     if ('dutyEffort' in p) p.dutyEffort = ['', 'off', 'low', 'high', 'max'].includes(String(p.dutyEffort)) ? String(p.dutyEffort) : 'low'
@@ -2340,6 +2343,11 @@ export function apply(ctx, config) {
         lastReplyVia = 'llm'
         const ids = [...new Set([...nextState.repliedIds, String(target.id)])].slice(-300)
         writeJson(mentionsFile, { ...nextState, repliedIds: ids, lastCode: 0 })
+        try {
+          const ost = ownState()
+          ost.doneIds = [...new Set([...(ost.doneIds || []), String(target.rpid)])].slice(-2000)
+          ownWriteJson(ost)
+        } catch { /* 忽略 */ }
         log(`@ 监听：已用直连模型回复（rpid=${newRpid || '?'}），判重表与日记已写`)
         done = true
         endTask(0)
@@ -2472,9 +2480,12 @@ export function apply(ctx, config) {
     if (!drafts || !drafts.length) return []
     const st = ownState()
     const ownImmediate = Boolean(opts && opts.immediate)
+    const gapOff = cfg.ownReplyGap === false
     const due = ownImmediate
       ? drafts.map((_, i) => Date.now() + 2000 + i * 4000)
-      : planReplyDueTimes({ now: Date.now(), count: drafts.length, lastSendAt: Number(st.lastReplySendAt || 0) })
+      : gapOff
+        ? drafts.map((_, i) => Date.now() + 5000 + i * 8000)
+        : planReplyDueTimes({ now: Date.now(), count: drafts.length, lastSendAt: Number(st.lastReplySendAt || 0) })
     const items = drafts.map((d, i) => ({
       id: String(d.id || `${d.bv}:${d.rpid}:${Date.now()}-${i}`),
       kind: d.kind || 'reply',
@@ -2502,7 +2513,7 @@ export function apply(ctx, config) {
       const due = st0.scheduled.filter((x) => Number(x.dueAt) <= now).sort((a, b) => Number(a.dueAt) - Number(b.dueAt))
       if (!due.length) return
       const forceDue = due.find((x) => x && x.force)
-      if (!forceDue && now - Number(st0.lastReplySendAt || 0) < REPLY_GAP_MIN_MS) return
+      if (!forceDue && cfg.ownReplyGap !== false && now - Number(st0.lastReplySendAt || 0) < REPLY_GAP_MIN_MS) return
       const item = forceDue || due[0]
       ownSending = true
       const args = { bvid: item.bv, text: item.text, rpid: Number(item.rpid) || 0 }
@@ -2528,6 +2539,7 @@ export function apply(ctx, config) {
           if (item.mid) { s2.personDone = s2.personDone || {}; s2.personDone[`${item.bv}:${item.mid}`] = Date.now() }
         }
         s2.queue = (s2.queue || []).filter((x) => !(String(x.bv) === String(item.bv) && Number(x.rpid) === Number(item.rpid)))
+        s2.recentTexts = [...(s2.recentTexts || []), String(item.text || '')].filter(Boolean).slice(-40)
         s2.recentReplied = [...(s2.recentReplied || []), {
           at: Date.now(), bv: item.bv, rpid: item.rpid, nick: item.nick,
           text: item.content || '', reply: item.text,
@@ -2550,8 +2562,13 @@ export function apply(ctx, config) {
       } else {
         // 发失败（风控/网络）⇒ 放回"待回"队列，冷静 10 分钟再试，别连续撞
         ownFailUntil = Date.now() + 10 * 60_000
-        if (item.kind !== 'bubble') {
+        const isDup = /12051|重复评论/.test(String(error || ''))
+        if (item.kind !== 'bubble' && !isDup) {
           s2.queue = [...(s2.queue || []), { bv: item.bv, rpid: item.rpid, root: item.root, mid: item.mid, nick: item.nick, content: item.content, title: item.title, ctime: Math.floor(Date.now() / 1000), queuedAt: Date.now(), error }].slice(-80)
+        }
+        if (isDup) {
+          s2.doneIds = [...new Set([...(s2.doneIds || []), String(item.rpid)])].slice(-2000)
+          log(`发送队列：B站 判"重复评论"，这条改成跳过（不再重试）`)
         }
         s2.lastResult = { at: Date.now(), ok: false, what: '发送失败', error, count: 0, targets: [{ bv: item.bv, nick: item.nick }] }
         log(`发送队列：失败 —— ${error}（10 分钟后再试）`)
@@ -2907,8 +2924,15 @@ export function apply(ctx, config) {
         if (Number(c.ctime) > hotAt) { hotAt = Number(c.ctime); hotBv = String(c.bv) }
       }
       if (hotBv) { st.hotBv = hotBv; st.hotCtime = hotAt }
+      // ⭐ 2026-10-25：本鱼已经回复过的评论（楼中楼里 mid=本鱼 的 root/parent）→ 跳过，防止重复回复
+      const selfRepliedIds = new Set()
+      for (const c of comments) {
+        if (String(c.mid || '') !== String(myUid() || '')) continue
+        if (c.root) selfRepliedIds.add(String(c.root))
+        if (c.parent) selfRepliedIds.add(String(c.parent))
+      }
       // ③ 过滤 + 排序（纯逻辑在 lib/own-comments.mjs）
-      const { picked, skipped } = pickOwnCommentTargets({
+      const pickRes = pickOwnCommentTargets({
         comments,
         selfUid: String(myUid() || ''),
         ownerUid: String(cfg.ownerUid || ''),
@@ -2919,6 +2943,8 @@ export function apply(ctx, config) {
         questionOnly: Boolean(cfg.ownCommentQuestionOnly),
         skipText: (t) => looksAttack(t) || snarkWorthy(t) || isBlacklisted(t),
       })
+      const picked = (pickRes.picked || []).filter((c) => !selfRepliedIds.has(String(c.rpid)) && !(c.root && selfRepliedIds.has(String(c.root))))
+      const skipped = pickRes.skipped
       const nComments = comments.length
       // ⭐ 2026-10-24 主人要的「未被回复的评论」列表：扫描到的、还没回过的一律进队列（含被自动过滤的长文/超长），
       //    悬浮窗里可以逐条「回复 / 忽略」；手动回复会强制起草（绕开攻击/长度过滤），不再有"永远回不到"的评论。
@@ -2929,6 +2955,7 @@ export function apply(ctx, config) {
         if (String(c.mid || '') === String(myUid() || '')) continue
         if (String(c.mid || '') === String(cfg.ownerUid || '')) continue
         if (st.doneIds.includes(String(c.rpid)) || schedRpid.has(String(c.rpid))) continue
+        if (selfRepliedIds.has(String(c.rpid)) || (c.root && selfRepliedIds.has(String(c.root)))) continue
         if (c.mid && st.personDone[`${c.bv}:${c.mid}`]) continue
         freshQueue.push({
           bv: c.bv, rpid: Number(c.rpid), root: Number(c.root) || 0, mid: String(c.mid || ''),
@@ -2985,7 +3012,19 @@ export function apply(ctx, config) {
               bv: c.bv, title: c.title || '', rpid: c.rpid, root: c.root || 0,
               nick: c.nick || c.uname || '匿名', content: String(c.content || '').slice(0, 400),
             })
-            const text = String(qr?.reply || '').trim()
+            let text = String(qr?.reply || '').trim()
+            const recentTexts = new Set((st.recentTexts || []).map((x) => String(x)))
+            if (text && recentTexts.has(text)) {
+              try {
+                const qr2 = await quickReply({
+                  bv: c.bv, title: c.title || '', rpid: c.rpid, root: c.root || 0,
+                  nick: c.nick || c.uname || '匿名', content: String(c.content || '').slice(0, 400),
+                }, '', '换一种说法，不要和刚才那句重复，加一点具体细节')
+                const t2 = String(qr2?.reply || '').trim()
+                if (t2 && !recentTexts.has(t2)) text = t2
+                else text = text + ' [tv_可爱]'
+              } catch { text = text + ' [tv_可爱]' }
+            }
             if (!text) {
               skipIdsNow.push(String(c.rpid))
               st.draftFail[`${c.bv}:${c.rpid}`] = { at: Date.now(), why: '判成不接' }
@@ -3234,14 +3273,28 @@ export function apply(ctx, config) {
     })
     const raw = got.raw
     if (!raw && got.failure) throw new Error('模型调用失败：' + String(got.failure.code || '') + ' ' + String(got.failure.message || '').slice(0, 120))
-    const m = /\{[\s\S]*\}/.exec(raw)
-    if (!m) throw new Error('模型没给出 JSON（' + raw.slice(0, 80) + '）' + (got.shapes.length ? '；流形状=' + got.shapes.join(' / ') : '；流里没有文本 chunk'))
-    const obj = JSON.parse(m[0])
-    return {
-      reply: String(obj.reply || '').trim(),
-      diaryOwner: String(obj.diary_owner || '').trim(),
-      diaryPrivate: String(obj.diary_private || '').trim(),
+    const cleaned = String(raw || '').replace(/```(?:json)?/gi, '').trim()
+    // ① 先按 JSON 解析（正常路径）
+    const m = /\{[\s\S]*\}/.exec(cleaned)
+    if (m) {
+      try {
+        const obj = JSON.parse(m[0])
+        return {
+          reply: String(obj.reply || '').trim(),
+          diaryOwner: String(obj.diary_owner || '').trim(),
+          diaryPrivate: String(obj.diary_private || '').trim(),
+        }
+      } catch { /* 模型给的 JSON 不完整 → 走纯文本兜底 */ }
     }
+    // ② 兜底：模型直接回了人话 —— 当成 reply 用。以前这里直接抛「模型没给出 JSON」，
+    //    于是队列里全是"说得对，写死代码那段确实没劲…"这种其实已经写好的回复却没发出去。
+    const plain = cleaned
+      .replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, '')
+      .replace(/^\{+|\}+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!plain) throw new Error('模型这次没写出内容（空回复）')
+    return { reply: plain.slice(0, 120), diaryOwner: '', diaryPrivate: '' }
   }
 
   /** 冒泡文案：宿主直接用 llm 起草（**不发**）；同样走"起草 → 1~2 分钟后发" */
@@ -3892,6 +3945,7 @@ export function apply(ctx, config) {
         if (!it) return sendJson(res, 200, { ok: false, error: '排期失败（状态写不进去？）' })
         const s2 = ownState()
         s2.queue = (s2.queue || []).filter((x) => !(String(x.bv) === bv && Number(x.rpid) === rpid))
+        s2.doneIds = [...new Set([...(s2.doneIds || []), String(rpid)])].slice(-2000)
         s2.lastResult = { at: Date.now(), ok: true, what: immediate ? '手动回复，几秒后发' : '手动起草，排队等发送', count: 1, etaSec: Math.max(1, Math.round((Number(it.dueAt) - Date.now()) / 1000)), targets: [{ bv, nick: it.nick }] }
         ownWriteJson(s2)
         log(`手动回复：已起草给 ${it.nick} 的回复，${Math.round((it.dueAt - Date.now()) / 1000)} 秒后发`)
@@ -4037,7 +4091,7 @@ export function apply(ctx, config) {
         // ⭐ 2026-10-24 评论区互动
         'commentScope', 'ownComment', 'ownCommentEverySec', 'ownCommentMaxVideos', 'ownCommentMaxPerRun', 'ownCommentMaxPerDay',
         'ownCommentQuestionOnly', 'ownBubble', 'ownBubbleMaxPerDay', 'ownCommentAtOwner', 'otherCommentMax', 'otherPromo', 'pinnedVideo',
-        'replyOnlyOwnVideos']) {
+        'replyOnlyOwnVideos', 'ownReplyGap']) {
         if (k in body) patch[k] = body[k]
       }
       // ⭐ 范围钳制 + 两份都写（config.json / DSH 原生设置页），统一走 persistCfg —— 见文件上方

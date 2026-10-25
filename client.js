@@ -633,7 +633,7 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const cScope = cfg.commentScope ?? 'own'                 // own / both / off
       const oc = st.ownComment || {}                           // 宿主的运行状态块（旧宿主 = 空对象）
       const cEvery = cfg.ownCommentEverySec ?? 30
-      const cMaxPerDay = cfg.ownCommentMaxPerDay ?? 200
+      const cMaxPerDay = cfg.ownCommentMaxPerDay ?? 500
       const cBubbleMax = cfg.ownBubbleMaxPerDay ?? 2
       const pinnedRaw = String(cfg.pinnedVideo || '').trim()
       const pinnedState = oc.pinned || null                    // { raw, resolved, error }
@@ -1029,7 +1029,7 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
             numRow('每次最多回几条', '1–5；默认 2',
               ownPerRun, setOwnPerRun, cfg.ownCommentMaxPerRun, 5, 1, 30, 'ownCommentMaxPerRun', '每批想好几条'),
             numRow('每天最多回几条', '0–100；默认 20（0 = 今天不回）',
-              ownPerDay, setOwnPerDay, cfg.ownCommentMaxPerDay, 200, 0, 500, 'ownCommentMaxPerDay', '每天回几条'),
+              ownPerDay, setOwnPerDay, cfg.ownCommentMaxPerDay, 500, 0, 2000, 'ownCommentMaxPerDay', '每天回几条'),
             h(ToggleRow, {
               label: '只回提问的',
               note: '默认关 = 谁说话都接（主人要「只要有人说话就可以回应」）；开了就只回提问 / 求助的',
@@ -1050,6 +1050,12 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
               note: '不用每条都 @：整轮最多挑 1 条 @ 你，冒泡也会 @（纯文本 @ 不产生通知，私信会另发一次）',
               on: cfg.ownCommentAtOwner ?? true,
               onChange: (v) => patch({ ownCommentAtOwner: v }, '@ 主人'),
+            }),
+            h(ToggleRow, {
+              label: '回复间隔 1~2 分钟（防封号）',
+              note: '默认开：每条回复之间隔 1~2 分钟才发（B站 对秒回很敏感）。关掉 = 想好就尽快发（约 5~8 秒一条），手动点「立即回」永远不受这个限制。',
+              on: cfg.ownReplyGap !== false,
+              onChange: (v) => patch({ ownReplyGap: v }, '回复间隔'),
             }),
             h(ToggleRow, {
               label: '只在本鱼 / 主人视频下回 @',
@@ -1779,6 +1785,8 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           h('button', { className: 'bp-btn' + (c.watchMentions ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('watchMentions', !c.watchMentions) }, c.watchMentions ? '开' : '关')),
         h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' }, h('div', null, '只在自家视频回 @（别人视频不回）')),
           h('button', { className: 'bp-btn' + (c.replyOnlyOwnVideos !== false ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('replyOnlyOwnVideos', !(c.replyOnlyOwnVideos !== false)) }, c.replyOnlyOwnVideos !== false ? '开' : '关')),
+        h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' }, h('div', null, '回复间隔 1~2 分钟（防封号）')),
+          h('button', { className: 'bp-btn' + (c.ownReplyGap !== false ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('ownReplyGap', !(c.ownReplyGap !== false)) }, c.ownReplyGap !== false ? '开' : '关')),
         h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' }, h('div', null, '结果私信通知我')),
           h('button', { className: 'bp-btn' + (c.dmNotify ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('dmNotify', !c.dmNotify) }, c.dmNotify ? '开' : '关')),
         h('div', { className: 'bp-note', style: { marginTop: '8px' } }, '返回方式：' + (c.replyVia === 'llm' ? '直连模型（省钱）' : '起会话（较贵）')),
