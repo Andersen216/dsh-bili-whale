@@ -633,7 +633,7 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const cScope = cfg.commentScope ?? 'own'                 // own / both / off
       const oc = st.ownComment || {}                           // 宿主的运行状态块（旧宿主 = 空对象）
       const cEvery = cfg.ownCommentEverySec ?? 30
-      const cMaxPerDay = cfg.ownCommentMaxPerDay ?? 20
+      const cMaxPerDay = cfg.ownCommentMaxPerDay ?? 200
       const cBubbleMax = cfg.ownBubbleMaxPerDay ?? 2
       const pinnedRaw = String(cfg.pinnedVideo || '').trim()
       const pinnedState = oc.pinned || null                    // { raw, resolved, error }
@@ -1027,9 +1027,9 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
             numRow('每次最多扫几条视频的评论区', '1–10；默认 4。轮转着扫（最久没查过的优先），不会老盯着同一条',
               ownVideos, setOwnVideos, cfg.ownCommentMaxVideos, 4, 1, 10, 'ownCommentMaxVideos', '每次扫几条视频'),
             numRow('每次最多回几条', '1–5；默认 2',
-              ownPerRun, setOwnPerRun, cfg.ownCommentMaxPerRun, 2, 1, 5, 'ownCommentMaxPerRun', '每次回几条'),
+              ownPerRun, setOwnPerRun, cfg.ownCommentMaxPerRun, 5, 1, 30, 'ownCommentMaxPerRun', '每批想好几条'),
             numRow('每天最多回几条', '0–100；默认 20（0 = 今天不回）',
-              ownPerDay, setOwnPerDay, cfg.ownCommentMaxPerDay, 20, 0, 100, 'ownCommentMaxPerDay', '每天回几条'),
+              ownPerDay, setOwnPerDay, cfg.ownCommentMaxPerDay, 200, 0, 500, 'ownCommentMaxPerDay', '每天回几条'),
             h(ToggleRow, {
               label: '只回提问的',
               note: '默认关 = 谁说话都接（主人要「只要有人说话就可以回应」）；开了就只回提问 / 求助的',

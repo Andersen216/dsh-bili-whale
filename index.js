@@ -152,9 +152,9 @@ export const Config = !z ? undefined : z.object({
   /** 每次最多扫几条视频的评论区（轮转，1–10） */
   ownCommentMaxVideos: z.number().default(4).extra('volatile', true),
   /** 每次最多回几条（1–5） */
-  ownCommentMaxPerRun: z.number().default(2).extra('volatile', true),
+  ownCommentMaxPerRun: z.number().default(5).extra('volatile', true),
   /** 每天最多回几条（0–100） */
-  ownCommentMaxPerDay: z.number().default(20).extra('volatile', true),
+  ownCommentMaxPerDay: z.number().default(200).extra('volatile', true),
   /** 只回提问的（默认关：谁说话都接） */
   ownCommentQuestionOnly: z.boolean().default(false).extra('volatile', true),
   /** 没新评论时冒个泡（发一条新评论） */
@@ -2486,7 +2486,7 @@ export function apply(ctx, config) {
       dueAt: due[i], createdAt: Date.now(),
       ...(ownImmediate ? { force: true } : {}),
     })).filter((x) => x.text && x.bv)
-    st.scheduled = [...(st.scheduled || []), ...items].slice(-30)
+    st.scheduled = [...(st.scheduled || []), ...items].slice(-120)
     ownWriteJson(st)
     return items
   }
@@ -2915,7 +2915,7 @@ export function apply(ctx, config) {
         // 已在发送队列里的也算"处理过了"，别重复起草（还没真发出去，所以不能只靠 doneIds）
         doneIds: [...(st.doneIds || []), ...((st.scheduled || []).map((x) => String(x.rpid)))],
         personDone: st.personDone,
-        max: Math.max(1, Math.min(Number(cfg.ownCommentMaxPerRun) || 2, 5)),
+        max: Math.max(1, Math.min(Number(cfg.ownCommentMaxPerRun) || 5, 30)),
         questionOnly: Boolean(cfg.ownCommentQuestionOnly),
         skipText: (t) => looksAttack(t) || snarkWorthy(t) || isBlacklisted(t),
       })
@@ -2953,10 +2953,24 @@ export function apply(ctx, config) {
         return !(f && nowMs - Number(f.at || 0) < 30 * 60_000)
       })
 
+      // ⭐ 2026-10-25 主人要「一次回完、慢慢发」：一次最多想好一批，在途上限 20 条；
+      //    发送仍然一条一条 1~2 分钟地发（防风控），发完再继续起草。
+      const schedNow = (ownState().scheduled || []).length
+      const batchCap = Math.max(1, Number(cfg.ownCommentMaxPerRun) || 5)
+      const pendingLimit = Math.max(0, 20 - schedNow)
+      const pickedBatch = pickedAuto.slice(0, Math.min(batchCap, pendingLimit))
+      if (!pickedBatch.length && pickedAuto.length) {
+        log(`回自己评论区：发送队列还有 ${schedNow} 条没发完，这一轮先不再起草（慢慢发）`)
+        st.lastResult = { at: Date.now(), ok: true, what: '排队已满，慢慢发', count: 0, note: `还有 ${schedNow} 条在排队发送（1~2 分钟一条）` }
+        ownWriteJson(st)
+        ownBusy = false
+        return { started: false, error: `还有 ${schedNow} 条排队在慢慢发（1~2 分钟一条），发完再继续` }
+      }
+
       // ④ 有可回的 → **先起草**，排到 1~2 分钟后发（主人要求：不要立刻发出去）
-      if (pickedAuto.length) {
+      if (pickedBatch.length) {
         // 悬浮窗要在"起草中"时看到是谁
-        st.pendingPreview = pickedAuto.map((c) => ({
+        st.pendingPreview = pickedBatch.map((c) => ({
           at: Date.now(), bv: c.bv, rpid: c.rpid, root: c.root || 0,
           nick: c.nick || c.uname || '匿名', content: String(c.content || '').slice(0, 120),
           title: c.title || '', kind: c.kind || 'owner',
@@ -2965,7 +2979,7 @@ export function apply(ctx, config) {
         const drafts = []
         const skipIdsNow = []
         const failedNow = []
-        for (const c of pickedAuto) {
+        for (const c of pickedBatch) {
           try {
             const qr = await quickReply({
               bv: c.bv, title: c.title || '', rpid: c.rpid, root: c.root || 0,
@@ -3111,11 +3125,23 @@ export function apply(ctx, config) {
     stTimer.unref?.()
     const bootSend = setTimeout(() => { ownSendTick().catch(() => {}) }, 8_000)
     bootSend.unref?.()
+    // ⭐ 2026-10-25：一上线就先补一轮（主人：「连上网就开始回，一次想好、慢慢发」）
+    const bootScan = setTimeout(() => {
+      try {
+        const eff = effectiveCommentPolicy(cfg)
+        if (!eff.own || !cfg.ownComment) return
+        log('上线自检：先扫全部视频补一轮评论区')
+        const st0 = ownState(); st0.scanAll = true; ownWriteJson(st0)
+        runOwnCommentRound('enable').catch((e) => log(`上线补回失败（已兜住）：${e?.message ?? e}`))
+      } catch (e) { log(`上线补回没起来：${e?.message ?? e}`) }
+    }, 12_000)
+    bootScan.unref?.()
     ctx.effect(() => () => {
       try { clearInterval(ot) } catch { /* 无所谓 */ }
       try { clearTimeout(boot) } catch { /* 无所谓 */ }
       try { clearInterval(stTimer) } catch { /* 无所谓 */ }
       try { clearTimeout(bootSend) } catch { /* 无所谓 */ }
+      try { clearTimeout(bootScan) } catch { /* 无所谓 */ }
     }, 'bili-whale: 评论区互动')
     log(`评论区互动已挂上：模式=${effectiveCommentPolicy(cfg).scope} · 我的评论区=${cfg.ownComment ? '开' : '关'} · 别人最多 ${effectiveCommentPolicy(cfg).otherMax} 句`)
   } catch (e) { log(`评论区互动循环没起来：${e?.message ?? e}`) }
