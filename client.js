@@ -1590,12 +1590,18 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
             if (!alive) return
             setSt(s1)
             try { const c = await bpFetch('/config'); if (alive) setCfg(c && (c.config || c)) } catch { /* 忽略 */ }
+            if (tab === 'dm') {
+              try {
+                const r = await bpFetch('/dm-sessions')
+                if (alive && r && r.ok) { setDmSessions(r.sessions || []); setDmLoadAt(Date.now()) }
+              } catch { /* 忽略 */ }
+            }
           } catch { /* 忽略 */ }
         }
         tick()
         const t = setInterval(tick, 4000)
         return () => { alive = false; clearInterval(t) }
-      }, [open])
+      }, [open, tab])
       const fab = h('button', {
         type: 'button', 'data-bili-fab': '', title: '刷B站（点开面板；面板可以拖动）', 'aria-label': '刷B站',
         onClick: () => setOpen(!open),
@@ -1850,21 +1856,15 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           else say('读私信失败：' + ((r && r.error) || '未知'))
         } catch (e) { say('读私信失败：' + String(e && e.message || e)) }
       }
-      React.useEffect(() => {
-        if (!open || tab !== 'dm') return undefined
-        loadDmSessions()
-        const t = setInterval(() => { loadDmSessions().catch(() => {}) }, 15000)
-        return () => clearInterval(t)
-      }, [open, tab])
       const dmTab = h('div', null,
         h('div', { className: 'bp-note' }, '读账号私信，一个一个粉丝回（符合人设、更亲近友善）'),
         h('div', { className: 'bp-note', style: { marginTop: '2px' } },
-          '自动回私信：' + (dmSt.enabled ? '开' : '关')
+          '自动回私信：' + (dmSt.enabled !== false ? '开' : '关')
           + ' · 每人每天 ' + (dmSt.perPersonPerDay ?? 5) + ' 条'
           + ' · 今天已回 ' + (dmSt.dayCount ?? 0) + ' 条'
           + (dmSt.pollSec ? ' · 每 ' + dmSt.pollSec + ' 秒看一次' : '')),
         h('div', { style: { display: 'flex', gap: '6px', margin: '8px 0' } },
-          h('button', { className: 'bp-btn' + (dmSt.enabled ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('dmAutoReply', !dmSt.enabled) }, dmSt.enabled ? '暂停自动回私信' : '开启自动回私信'),
+          h('button', { className: 'bp-btn' + (dmSt.enabled !== false ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('dmAutoReply', dmSt.enabled === false) }, dmSt.enabled !== false ? '暂停自动回私信' : '开启自动回私信'),
           h('button', { className: 'bp-btn', disabled: !!busy, onClick: () => { loadDmSessions(); say('已刷新私信') } }, '刷新私信列表')),
         h('div', { className: 'bp-note' }, '私信会话（' + ((dmSessions || []).length) + '）' + (dmLoadAt ? ' · ' + bpClock(dmLoadAt) : '')),
         (dmSessions || []).length ? (dmSessions || []).slice(0, 10).map((x) => h('div', { className: 'bp-row', key: 'dms' + x.uid },

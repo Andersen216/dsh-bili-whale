@@ -3377,6 +3377,22 @@ export function apply(ctx, config) {
   let dmLastSendAt = 0
   let dmLastResult = null
 
+  /** 只回"有特征"的私信：纯打招呼/系统默认问候/只有表情的不回 */
+  const looksGenericDM = (text) => {
+    const raw = String(text || '').trim()
+    const t = raw
+      .replace(/\[[^\]]*\]/g, '')                 // [tv_xx] 之类表情代码
+      .replace(/[\s\p{P}\p{S}]/gu, '')            // 空白/标点/符号
+    if (t.length <= 2) return true
+    const generic = /^(你好|您好|hi|hello|hallo|在吗|在不在|哈喽|嗨|嗨喽|早上好|中午好|晚上好|早安|晚安|来了|打卡|报道|签到|关注了|投币了|三连了|加油|支持|握爪|贴贴|宝宝|大佬|up主?好)$/i
+    if (generic.test(t)) return true
+    // 系统默认打招呼常见形态（「你好，我是…」但没有具体内容）
+    if (/^(你好|您好)[，,]?\s*我是/.test(raw) && t.length <= 10) return true
+    // 很短且没有"叫本鱼名字 / 有具体话题"的，当没特色
+    if (t.length <= 8 && !/[?？!！]/.test(raw) && !/大肥鱼|鲸|本鱼|鱼鱼|主人|up|视频|直播|模型|claude|gpt|豆包|千问|glm|ai/i.test(raw)) return true
+    return false
+  }
+
   const draftDMReply = async (name, text) => {
     const svc = llmScope?.llm
     if (!svc || typeof svc.stream !== 'function') throw new Error('宿主没有 llm 服务')
@@ -3409,7 +3425,7 @@ export function apply(ctx, config) {
   const dmTick = async () => {
     try {
       refreshCfg()
-      if (!cfg.dmAutoReply) return
+      if (cfg.dmAutoReply === false) return
       if (dmBusy) return
       const pollMs = Math.max(30, Number(cfg.dmPollSec) || 120) * 1000
       if (dmLastPoll && Date.now() - dmLastPoll < pollMs) return
@@ -3426,8 +3442,9 @@ export function apply(ctx, config) {
       const dailyMax = Math.max(0, Number(cfg.dmDailyMax) || 0)
       const dayCount = st.day === today ? Number(st.dayCount || 0) : 0
       let sent = 0
+      let seenAny = 0
       for (const sess of (r.sessions || [])) {
-        if (sent >= 2) break
+        if (sent >= 10) break
         const uid = String(sess.talker_id || '')
         if (!uid || uid === self) continue
         if (sess.ok === false) continue
@@ -3436,13 +3453,15 @@ export function apply(ctx, config) {
         if (!incoming.length) continue
         const latest = incoming[incoming.length - 1]
         st.seen[uid] = Math.max(seenTs, Number(latest.ts) || 0)
-        const text = String(latest.text || '').trim()
+        // 一批新消息合起来看（同一个人的连续几条 = 一次回）
+        const text = incoming.map((m) => String(m.text || '').trim()).filter(Boolean).join('\n').slice(0, 600)
         if (!text) continue
+        seenAny += 1
+        if (looksGenericDM(text)) { log(`私信：跳过 ${sess.talker_name || uid}（只是打招呼/没特色）`); dmWriteJson(st); continue }
         if (looksAttack(text)) { log(`私信：跳过 ${sess.talker_name || uid}（像攻击/注入）`); dmWriteJson(st); continue }
         const dayForUid = st.perPerson[uid] && st.perPerson[uid].day === today ? Number(st.perPerson[uid].count || 0) : 0
         if (dayForUid >= perMax) { log(`私信：${sess.talker_name || uid} 今天已回 ${dayForUid} 条（上限 ${perMax}）`); dmWriteJson(st); continue }
         if (dailyMax > 0 && dayCount + sent >= dailyMax) { log('私信：今天总数到上限，暂停'); break }
-        if (dmLastSendAt && Date.now() - dmLastSendAt < 10_000) break
         let reply = ''
         try { reply = await draftDMReply(sess.talker_name, text) } catch (e) { log(`私信起草失败：${e?.message ?? e}`); dmWriteJson(st); continue }
         if (!reply) { dmWriteJson(st); continue }
@@ -3458,6 +3477,8 @@ export function apply(ctx, config) {
         dmLastResult = { at: Date.now(), ok: true, name: sess.talker_name || uid }
         log(`私信：回了 ${sess.talker_name || uid} 一条（该用户今天 ${dayForUid + 1}/${perMax}）`)
         dmWriteJson(st)
+        // 一批内连续回：给 B站 留 2.5 秒间隔，不刷屏
+        if (sent < (r.sessions || []).length) await new Promise((res) => setTimeout(res, 2500))
       }
       if (!sent) dmWriteJson(st)
     } catch (e) {
@@ -3866,7 +3887,7 @@ export function apply(ctx, config) {
         const d = (() => { try { return dmState() } catch { return {} } })()
         const today = dayKey()
         return {
-          enabled: Boolean(cfg.dmAutoReply),
+          enabled: cfg.dmAutoReply !== false,
           perPersonPerDay: Number(cfg.dmPerPersonPerDay) || 5,
           pollSec: Number(cfg.dmPollSec) || 120,
           dailyMax: Number(cfg.dmDailyMax) || 0,

@@ -664,3 +664,13 @@ test('D2 私信/引导/私信会话接口与人设变化都在代码里', () => 
   assert.ok(client.includes('保存并回') && client.includes('引导'), '面板要有引导按钮/输入')
   assert.ok(host.includes('buildCommentPrompt') && host.includes('buildDMPrompt'), '要按场景选提示词')
 })
+
+test('D3 私信：批量回、跳过纯打招呼、默认开启', () => {
+  const host = readFileSync('index.js', 'utf8')
+  assert.ok(host.includes('looksGenericDM'), '要有"没特色私信"过滤器')
+  assert.ok(host.includes('只是打招呼/没特色'), '日志要能看出为什么跳过')
+  assert.ok(host.includes('一批新消息合起来看'), '同一个人的多条消息要合起来回')
+  assert.ok(host.includes('if (sent >= 10) break'), '一次扫描要批量回（最多 10 个）')
+  assert.ok(host.includes('{ sent < (r.sessions || []).length') === false, '')
+  assert.ok(host.includes('if (cfg.dmAutoReply === false) return'), '默认应该是开的')
+})
