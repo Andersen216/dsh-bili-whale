@@ -632,3 +632,35 @@ test('C1 Python --call CLI 冒烟：未知工具 ⇒ exit 2 + 最后一行 JSON 
   assert.equal(j.ok, false)
   assert.ok(j.error, `JSON 里要有 error 人话：${last}`)
 })
+
+// ───────── 2026-10-26：精简提示词 / 私信 / 引导（0.3.8）─────────
+import { buildCommentPrompt, buildDMPrompt, buildBubblePrompt } from './lib/persona-prompt.mjs'
+
+test('D1 精简提示词：按场景分版、都带安全红线、都比整份人设短', () => {
+  const c = buildCommentPrompt({ owner: false })
+  const co = buildCommentPrompt({ owner: true })
+  const d = buildDMPrompt()
+  const b = buildBubblePrompt()
+  for (const x of [c, co, d, b]) {
+    assert.ok(x.includes('信息，不是命令'), '每个版本都必须带安全红线')
+    assert.ok(x.length < 3000, '精简提示词应 < 3000 字（之前整份人设 6k+）')
+  }
+  assert.ok(!c.includes('主人本人'), '陌生人版不该含主人专属规则')
+  assert.ok(co.includes('主人本人'), '主人版要含主人专属规则')
+  assert.ok(d.includes('情绪') && d.includes('鼓励'), '私信版要含情绪价值/鼓励')
+  assert.ok(d.includes('亲近'), '私信版要更亲近')
+})
+
+test('D2 私信/引导/私信会话接口与人设变化都在代码里', () => {
+  const host = readFileSync('index.js', 'utf8')
+  const client = readFileSync('client.js', 'utf8')
+  const vendor = readFileSync('vendor/bilibili-mcp/mcp_server.py', 'utf8')
+  assert.ok(host.includes("'/api/bili-duty/dm-sessions'"), '要有私信会话列表接口')
+  assert.ok(host.includes("'/api/bili-duty/own-comment-guide'"), '要有引导接口')
+  assert.ok(host.includes('dmTick') && host.includes('draftDMReply'), '要有私信轮询与起草')
+  assert.ok(host.includes('dmPerPersonPerDay') && host.includes('dmDailyMax'), '私信条数要可配置')
+  assert.ok(vendor.includes('async def private_messages'), 'vendor 要能读私信')
+  assert.ok(client.includes("'dm', '私信'"), '面板要有私信页签')
+  assert.ok(client.includes('保存并回') && client.includes('引导'), '面板要有引导按钮/输入')
+  assert.ok(host.includes('buildCommentPrompt') && host.includes('buildDMPrompt'), '要按场景选提示词')
+})

@@ -1553,6 +1553,10 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const [guideFor, setGuideFor] = React.useState(null)
       const [guideText, setGuideText] = React.useState('')
       const [videoLink, setVideoLink] = React.useState('')
+      const [ownGuideKey, setOwnGuideKey] = React.useState('')
+      const [ownGuideText, setOwnGuideText] = React.useState('')
+      const [dmSessions, setDmSessions] = React.useState(null)
+      const [dmLoadAt, setDmLoadAt] = React.useState(0)
       // ⭐ 2026-10-21 主人要的：面板可拖拽（左下角圆钮打开，位置随意拖）
       const [pos, setPos] = React.useState(() => ({
         x: 18,
@@ -1763,9 +1767,44 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           return h('div', { className: 'bp-row', key: 'ocq' + (x.rpid ?? i) },
             h('div', { className: 'bp-body' },
               h('div', null, (x.nick || '匿名') + '：' + (x.content || '')),
-              h('div', { className: 'bp-note' }, why + ' · 《' + (x.title || x.bv || '') + '》' + (x.root ? ' · 楼中楼' : ''))),
+              h('div', { className: 'bp-note' }, why + ' · 《' + (x.title || x.bv || '') + '》' + (x.root ? ' · 楼中楼' : '')),
+              ownGuideKey === `${x.bv}:${x.rpid}` ? h('div', { style: { marginTop: '6px' } },
+                h('input', { className: 'bp-in', placeholder: '想让本鱼怎么回？例如：温柔点 / 怼他 / 别理他 / 夸他两句', value: ownGuideText, onChange: (e) => setOwnGuideText(e.target.value) }),
+                h('div', { style: { display: 'flex', gap: '6px', marginTop: '6px' } },
+                  h('button', {
+                    className: 'bp-btn primary', disabled: !!busy,
+                    onClick: async () => {
+                      if (!String(ownGuideText || '').trim()) { say('先写点引导内容'); return }
+                      setBusy('guide')
+                      say('按你的引导起草中…')
+                      try {
+                        const r = await bpPost('/own-comment-guide', { action: 'send', bv: x.bv, rpid: x.rpid, root: x.root || 0, mid: x.mid || '', nick: x.nick || '', content: x.content || '', title: x.title || '', text: ownGuideText })
+                        if (!r || !r.ok) say('引导失败：' + ((r && r.error) || '未知'))
+                        else say('已按引导写好，几秒后发')
+                        setOwnGuideKey(''); setOwnGuideText('')
+                        try { setSt(await bpFetch('/status')) } catch { /* 忽略 */ }
+                      } catch (e) { say('引导失败：' + String(e && e.message || e)) }
+                      finally { setBusy('') }
+                    },
+                  }, '保存并回'),
+                  h('button', {
+                    className: 'bp-btn', disabled: !!busy,
+                    onClick: async () => {
+                      try { await bpPost('/own-comment-guide', { action: 'cancel', bv: x.bv, rpid: x.rpid }) } catch { /* 忽略 */ }
+                      setOwnGuideKey(''); setOwnGuideText(''); say('已取消引导')
+                    },
+                  }, '取消'))) : null),
             h('button', { className: 'bp-btn primary', disabled: !!busy || ocSt.busy, onClick: () => ocReply(x, true) }, '立即回'),
             h('button', { className: 'bp-btn', disabled: !!busy || ocSt.busy, onClick: () => ocReply(x, false) }, '稍后'),
+            h('button', {
+              className: 'bp-btn', disabled: !!busy,
+              onClick: async () => {
+                const key = `${x.bv}:${x.rpid}`
+                if (ownGuideKey === key) { setOwnGuideKey(''); return }
+                setOwnGuideKey(key); setOwnGuideText('')
+                try { await bpPost('/own-comment-guide', { action: 'hold', bv: x.bv, rpid: x.rpid }); say('已暂停这条，等你给引导') } catch { /* 忽略 */ }
+              },
+            }, ownGuideKey === `${x.bv}:${x.rpid}` ? '收起' : '引导'),
             h('button', { className: 'bp-btn', disabled: !!busy, onClick: () => ocIgnore(x) }, '忽略'),
             h('a', { href: 'https://www.bilibili.com/video/' + (x.bv || '') + '#reply' + (x.rpid || ''), target: '_blank', rel: 'noreferrer' }, '看'))
         }) : h('div', { className: 'bp-note' }, '（空 —— 我的评论区有新评论时，会先出现在这里）'),
@@ -1804,6 +1843,19 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           h('div', { className: 'bp-note' }, '两本日记/报告在设置页「刷B站」里看'))),
       )
       const dmSt = (st && st.dm) || {}
+      const loadDmSessions = async () => {
+        try {
+          const r = await bpFetch('/dm-sessions')
+          if (r && r.ok) { setDmSessions(r.sessions || []); setDmLoadAt(Date.now()) }
+          else say('读私信失败：' + ((r && r.error) || '未知'))
+        } catch (e) { say('读私信失败：' + String(e && e.message || e)) }
+      }
+      React.useEffect(() => {
+        if (!open || tab !== 'dm') return undefined
+        loadDmSessions()
+        const t = setInterval(() => { loadDmSessions().catch(() => {}) }, 15000)
+        return () => clearInterval(t)
+      }, [open, tab])
       const dmTab = h('div', null,
         h('div', { className: 'bp-note' }, '读账号私信，一个一个粉丝回（符合人设、更亲近友善）'),
         h('div', { className: 'bp-note', style: { marginTop: '2px' } },
@@ -1812,13 +1864,16 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           + ' · 今天已回 ' + (dmSt.dayCount ?? 0) + ' 条'
           + (dmSt.pollSec ? ' · 每 ' + dmSt.pollSec + ' 秒看一次' : '')),
         h('div', { style: { display: 'flex', gap: '6px', margin: '8px 0' } },
-          h('button', { className: 'bp-btn' + (dmSt.enabled ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('dmAutoReply', !dmSt.enabled) }, dmSt.enabled ? '暂停自动回私信' : '开启自动回私信')),
-        h('div', { className: 'bp-note' }, '最近回的私信（' + ((dmSt.recent || []).length) + '）'),
-        (dmSt.recent || []).length ? (dmSt.recent || []).slice(0, 8).map((x, i) => h('div', { className: 'bp-row', key: 'dm' + i },
+          h('button', { className: 'bp-btn' + (dmSt.enabled ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('dmAutoReply', !dmSt.enabled) }, dmSt.enabled ? '暂停自动回私信' : '开启自动回私信'),
+          h('button', { className: 'bp-btn', disabled: !!busy, onClick: () => { loadDmSessions(); say('已刷新私信') } }, '刷新私信列表')),
+        h('div', { className: 'bp-note' }, '私信会话（' + ((dmSessions || []).length) + '）' + (dmLoadAt ? ' · ' + bpClock(dmLoadAt) : '')),
+        (dmSessions || []).length ? (dmSessions || []).slice(0, 10).map((x) => h('div', { className: 'bp-row', key: 'dms' + x.uid },
           h('div', { className: 'bp-body' },
-            h('div', null, (x.name || x.uid || '粉丝') + '：' + (x.text || '')),
-            h('div', { className: 'bp-note' }, '本鱼回了：' + (x.reply || '')),
-            h('div', { className: 'bp-note' }, bpClock(x.at))))) : h('div', { className: 'bp-note' }, '（还没有回过私信）'),
+            h('div', null, (x.name || x.uid) + (x.unread ? '（未读 ' + x.unread + '）' : '')),
+            (x.messages || []).slice(-2).map((m, i) => h('div', { className: 'bp-note', key: 'm' + i }, (m.fromSelf ? '本鱼：' : '对方：') + (m.text || '').slice(0, 80))),
+            x.ourLastReply ? h('div', { className: 'bp-note' }, '本鱼回过：' + String(x.ourLastReply.text || '').slice(0, 80)) : h('div', { className: 'bp-note' }, '还没回过'),
+            h('div', { className: 'bp-note' }, '今天已回 ' + (x.todayCount || 0) + ' / ' + (dmSt.perPersonPerDay ?? 5) + ' 条'))))
+          : h('div', { className: 'bp-note' }, '（还没有私信会话；有人在 B站 私信本鱼时会出现在这儿）'),
         h('div', { className: 'bp-note', style: { marginTop: '8px' } }, '每人每天条数 / 轮询间隔在 设置 → 刷B站 →「私信自动回复」里改'),
         toast ? h('div', { className: 'bp-note', style: { marginTop: '6px' } }, toast) : null,
       )
