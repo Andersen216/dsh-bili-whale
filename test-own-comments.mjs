@@ -163,7 +163,7 @@ test('A4 clampOwnCommentPatch：13 个字段全部按契约钳制', () => {
   assert.equal(OWN_COMMENT_DEFAULTS.ownCommentEverySec, 30, '我的评论区默认 30 秒扫一次')
   assert.equal(OWN_COMMENT_DEFAULTS.ownCommentMaxVideos, 4)
   assert.equal(OWN_COMMENT_DEFAULTS.ownCommentMaxPerRun, 5)
-  assert.equal(OWN_COMMENT_DEFAULTS.ownCommentMaxPerDay, 500)
+  assert.equal(OWN_COMMENT_DEFAULTS.ownCommentMaxPerDay, 100)
   assert.equal(OWN_COMMENT_DEFAULTS.ownBubbleMaxPerDay, 2)
   assert.equal(OWN_COMMENT_DEFAULTS.otherCommentMax, 1)
 })
@@ -179,7 +179,7 @@ test('A5 clampOwnCommentPatch：非法值回默认、pinnedVideo 截断、别的
   assert.equal(d.ownCommentEverySec, 30)
   assert.equal(d.ownCommentMaxVideos, 4)
   assert.equal(d.ownCommentMaxPerRun, 5)
-  assert.equal(d.ownCommentMaxPerDay, 500)
+  assert.equal(d.ownCommentMaxPerDay, 100)
   assert.equal(d.ownBubbleMaxPerDay, 2)
   assert.equal(d.otherCommentMax, 1)
   assert.equal(d.pinnedVideo.length, 120, 'pinnedVideo 最长 120 字')
@@ -246,10 +246,10 @@ test('A8 pickOwnCommentTargets：questionOnly=true 时只留提问', () => {
 })
 
 test('A9 pickOwnCommentTargets：max 截断、14 天边界、personDone 按 bv 区分', () => {
-  // max 截断：6 条只回 3 条；max 超过 5 按 5 算
+  // max 截断：6 条只回 3 条；max 上限 30（2026-10-25 放宽批量）
   const many = Array.from({ length: 6 }, (_, i) => mkComment({ rpid: 100 + i, mid: String(900 + i), content: '来了来了' }))
   assert.equal(pickOwnCommentTargets({ comments: many, now: NOW, max: 3 }).picked.length, 3)
-  assert.equal(pickOwnCommentTargets({ comments: many, now: NOW, max: 99 }).picked.length, 5)
+  assert.equal(pickOwnCommentTargets({ comments: many, now: NOW, max: 99 }).picked.length, 6)
 
   // 正好 14 天：留着；14 天多 1 秒：跳过
   const boundary = pickOwnCommentTargets({

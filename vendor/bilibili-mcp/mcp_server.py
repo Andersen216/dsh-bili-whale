@@ -1522,6 +1522,62 @@ async def comments_time_batch(items, ps: int = 20) -> str:
     return json.dumps({"ok": True, "results": out}, ensure_ascii=False)
 
 
+# ========== 内部调用：读私信（只读，不发；给宿主的"回私信"功能用） ==========
+#     python mcp_server.py --call private_messages --args '{"limit":10}'
+# 说明：B站 私信走 session 接口；会话列表 + 每个会话最近 10 条。
+# 内容里 content 常是 JSON 字符串（{"content":"..."}），这里统一抽成纯文本。
+
+async def private_messages(limit: int = 10) -> str:
+    """读最近私信会话（只读）。返回每个会话的人、未读数、最近消息。"""
+    cred = load_credential()
+    if not cred:
+        return json.dumps({"ok": False, "error": "not_logged_in"}, ensure_ascii=False)
+    self_uid = int(getattr(cred, "dedeuserid", 0) or 0)
+    try:
+        sess = await session.get_sessions(credential=cred, session_type=1)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
+    data = (sess or {}).get("data") or {}
+    raw_list = data.get("session_list") or []
+    out = []
+    for s in raw_list[: max(1, min(int(limit or 10), 30))]:
+        talker = int(s.get("talker_id") or 0)
+        if not talker:
+            continue
+        item = {
+            "talker_id": talker,
+            "talker_name": s.get("talker_name") or "",
+            "unread": int(s.get("unread_count") or 0),
+            "top_ts": int(s.get("session_ts") or 0),
+            "ok": True,
+            "messages": [],
+        }
+        try:
+            msgs = await session.fetch_session_msgs(talker_id=talker, credential=cred, session_type=1)
+            arr = (((msgs or {}).get("data") or {}).get("messages") or [])
+        except Exception as e:
+            item["ok"] = False
+            item["error"] = f"{type(e).__name__}: {e}"
+            arr = []
+        for m in arr[-10:]:
+            c = m.get("content") or ""
+            text = c
+            if isinstance(c, str) and c.strip().startswith("{"):
+                try:
+                    text = json.loads(c).get("content") or ""
+                except Exception:
+                    text = c
+            item["messages"].append({
+                "sender_uid": int(m.get("sender_uid") or 0),
+                "ts": int(m.get("timestamp") or 0),
+                "msg_type": int(m.get("msg_type") or 0),
+                "text": str(text)[:800],
+            })
+        out.append(item)
+        await asyncio.sleep(0.3)
+    return json.dumps({"ok": True, "self_uid": self_uid, "sessions": out}, ensure_ascii=False)
+
+
 def _cli_main() -> None:
     """`--call <函数名> --args '<json>'` 的一次性调用入口。"""
     try:

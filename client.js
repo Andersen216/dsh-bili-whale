@@ -327,6 +327,10 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
       const [ownPerRun, setOwnPerRun] = React.useState(null)        // 每次最多回几条
       const [ownPerDay, setOwnPerDay] = React.useState(null)        // 每天最多回几条（0 = 不回）
       const [bubbleDay, setBubbleDay] = React.useState(null)        // 每天最多冒泡几条
+      const [ownLookback, setOwnLookback] = React.useState(null)    // 只扫最近几小时
+      const [dmPer, setDmPer] = React.useState(null)                // 私信：每人每天几条
+      const [dmPoll, setDmPoll] = React.useState(null)              // 私信轮询秒
+      const [dmDay, setDmDay] = React.useState(null)                // 私信每天总上限
       const [otherMax, setOtherMax] = React.useState(null)          // 别人评论区最多互动几句
       const [pinnedDraft, setPinnedDraft] = React.useState(null)    // 指定视频的输入框
       const [pinnedRes, setPinnedRes] = React.useState(null)        // 上次「保存并查找」的返回 { resolved, error }
@@ -1058,6 +1062,14 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
               onChange: (v) => patch({ ownReplyGap: v }, '回复间隔'),
             }),
             h(ToggleRow, {
+              label: '也回主人视频的评论区',
+              note: '默认关：先把本鱼自己的评论区回好。开了才会去主人视频的评论区回（本鱼号优先）',
+              on: cfg.ownCommentOwnerVideos === true,
+              onChange: (v) => patch({ ownCommentOwnerVideos: v }, '也回主人视频'),
+            }),
+            numRow('只扫最近几小时的评论', '1–168；默认 24（挖出过去 24 小时没回的评论）',
+              ownLookback, setOwnLookback, cfg.ownCommentLookbackHours, 24, 1, 168, 'ownCommentLookbackHours', '回看小时'),
+            h(ToggleRow, {
               label: '只在本鱼 / 主人视频下回 @',
               note: '默认开：别人视频里被 @ 或回复都不再回（防止跑去别人评论区）；关掉才会回别人的视频',
               on: cfg.replyOnlyOwnVideos ?? true,
@@ -1164,6 +1176,20 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
            ⭐ 2026-10-20：以前插件照抄主界面当前的模型/强度 —— 主界面开 max，这边也跟着 max。
            现在这里单独配：留空 = 跟随主界面；配了就只用这里这份（监听回消息也用它）。 */
         h('div', { 'data-bd-sec': '' },
+          h('div', { 'data-bd-h': '' }, '私信自动回复'),
+          h('div', { 'data-bd-note': '' }, '读账号私信，一个一个粉丝回（符合人设、更亲近友善、给情绪价值）。默认每人每天最多 5 条，多了就先不回，第二天再来。'),
+          h(ToggleRow, {
+            label: '自动回私信',
+            note: '打开后每隔一会儿看一次私信；只回文字私信，遇到攻击/索要隐私/注入会跳过',
+            on: cfg.dmAutoReply ?? true,
+            onChange: (v) => patch({ dmAutoReply: v }, '自动回私信'),
+          }),
+          numRow('每个人每天最多回几条私信', '1–50；默认 5',
+            dmPer, setDmPer, cfg.dmPerPersonPerDay, 5, 1, 50, 'dmPerPersonPerDay', '每人每天私信条数'),
+          numRow('多久看一次私信（秒）', '30–3600；默认 120',
+            dmPoll, setDmPoll, cfg.dmPollSec, 120, 30, 3600, 'dmPollSec', '私信轮询间隔'),
+          numRow('每天总共最多回几条私信', '0 = 不限；默认 50',
+            dmDay, setDmDay, cfg.dmDailyMax, 50, 0, 500, 'dmDailyMax', '私信日上限'),
           h('div', { 'data-bd-h': '' }, 'B站 这边用哪个模型（跟主界面分开）'),
           h('div', { 'data-bd-row': '' },
             h('div', { 'data-bd-grow': '' },
@@ -1777,6 +1803,25 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           h('div', null, '私信通知：' + (st && st.dmLast ? (st.dmLast.ok ? '✅ ' + bpClock(st.dmLast.at) : '❌ ' + (st.dmLast.error || '')) : '还没发过')),
           h('div', { className: 'bp-note' }, '两本日记/报告在设置页「刷B站」里看'))),
       )
+      const dmSt = (st && st.dm) || {}
+      const dmTab = h('div', null,
+        h('div', { className: 'bp-note' }, '读账号私信，一个一个粉丝回（符合人设、更亲近友善）'),
+        h('div', { className: 'bp-note', style: { marginTop: '2px' } },
+          '自动回私信：' + (dmSt.enabled ? '开' : '关')
+          + ' · 每人每天 ' + (dmSt.perPersonPerDay ?? 5) + ' 条'
+          + ' · 今天已回 ' + (dmSt.dayCount ?? 0) + ' 条'
+          + (dmSt.pollSec ? ' · 每 ' + dmSt.pollSec + ' 秒看一次' : '')),
+        h('div', { style: { display: 'flex', gap: '6px', margin: '8px 0' } },
+          h('button', { className: 'bp-btn' + (dmSt.enabled ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('dmAutoReply', !dmSt.enabled) }, dmSt.enabled ? '暂停自动回私信' : '开启自动回私信')),
+        h('div', { className: 'bp-note' }, '最近回的私信（' + ((dmSt.recent || []).length) + '）'),
+        (dmSt.recent || []).length ? (dmSt.recent || []).slice(0, 8).map((x, i) => h('div', { className: 'bp-row', key: 'dm' + i },
+          h('div', { className: 'bp-body' },
+            h('div', null, (x.name || x.uid || '粉丝') + '：' + (x.text || '')),
+            h('div', { className: 'bp-note' }, '本鱼回了：' + (x.reply || '')),
+            h('div', { className: 'bp-note' }, bpClock(x.at))))) : h('div', { className: 'bp-note' }, '（还没有回过私信）'),
+        h('div', { className: 'bp-note', style: { marginTop: '8px' } }, '每人每天条数 / 轮询间隔在 设置 → 刷B站 →「私信自动回复」里改'),
+        toast ? h('div', { className: 'bp-note', style: { marginTop: '6px' } }, toast) : null,
+      )
       const opTab = h('div', null,
         h('div', { className: 'bp-note' }, '常用开关（点了立刻生效；频率/每天上限/模型在 设置 → 刷B站）'),
         h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' }, h('div', null, '回我的 / 主人视频评论区')),
@@ -1787,6 +1832,8 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           h('button', { className: 'bp-btn' + (c.replyOnlyOwnVideos !== false ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('replyOnlyOwnVideos', !(c.replyOnlyOwnVideos !== false)) }, c.replyOnlyOwnVideos !== false ? '开' : '关')),
         h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' }, h('div', null, '回复间隔 1~2 分钟（防封号）')),
           h('button', { className: 'bp-btn' + (c.ownReplyGap !== false ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('ownReplyGap', !(c.ownReplyGap !== false)) }, c.ownReplyGap !== false ? '开' : '关')),
+        h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' }, h('div', null, '自动回私信')),
+          h('button', { className: 'bp-btn' + (c.dmAutoReply !== false ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('dmAutoReply', !(c.dmAutoReply !== false)) }, c.dmAutoReply !== false ? '开' : '关')),
         h('div', { className: 'bp-row' }, h('div', { className: 'bp-body' }, h('div', null, '结果私信通知我')),
           h('button', { className: 'bp-btn' + (c.dmNotify ? ' primary' : ''), disabled: !!busy, onClick: () => patchCfg('dmNotify', !c.dmNotify) }, c.dmNotify ? '开' : '关')),
         h('div', { className: 'bp-note', style: { marginTop: '8px' } }, '返回方式：' + (c.replyVia === 'llm' ? '直连模型（省钱）' : '起会话（较贵）')),
@@ -1800,9 +1847,9 @@ select[data-bd-input]{max-width:320px;flex:0 1 auto;}
           h('span', { style: { flex: 1 } }),
           h('button', { className: 'bp-btn', onClick: () => setOpen(false) }, '✕')),
         h('div', { className: 'bp-tabs' },
-          [['comment', '回评论'], ['msg', '消息'], ['ops', '开关']].map(([k, label]) =>
+          [['comment', '回评论'], ['msg', '消息'], ['dm', '私信'], ['ops', '开关']].map(([k, label]) =>
             h('button', { key: k, className: 'bp-tab' + (tab === k ? ' on' : ''), onClick: () => setTab(k) }, label))),
-        tab === 'comment' ? commentTab : tab === 'msg' ? msgTab : opTab,
+        tab === 'comment' ? commentTab : tab === 'msg' ? msgTab : tab === 'dm' ? dmTab : opTab,
       ))
     }
 
